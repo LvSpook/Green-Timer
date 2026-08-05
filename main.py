@@ -27,21 +27,25 @@ from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QAction, QFontMetrics, QP
 def get_resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
 
 # --- APP VERSION & GITHUB REPO CONFIG ---
-APP_VERSION = "v1.0.0"
-GITHUB_REPO = "LvSpook/Green-Timer"  # CHANGE THIS to your "username/repository"
+APP_VERSION = "v1.1.0"
+GITHUB_REPO = "LvSpook/Green-Timer"  
 
 CONFIG_FILE = "timer_pro_settings.json"
 
 DEFAULT_CONFIG = {
     "mode": "up",              
-    "countdown_start": 60.0,   
+    "countdown_start": 60.0,
+    "pomo_work": 25.0,
+    "pomo_break": 5.0,
+    "pomo_long_break": 15.0,
+    "pomo_cycles": 4,
+    "clock_format": "%H:%M:%S",
     "threshold_time": 60.0,    
     "use_threshold": True,
     "font_size": 42,
@@ -237,6 +241,9 @@ class ProGreenTimer(QMainWindow):
         self.last_time_val = None
         self.current_point_size = self.config.get("font_size", 42)
         
+        self.pomo_state = "work"
+        self.pomo_cycle_count = 0
+        
         self.current_color = QColor(self.config["normal_color"])
         
         self.sprite_color = None
@@ -339,7 +346,6 @@ class ProGreenTimer(QMainWindow):
     def setup_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
         
-        # USE THE PACKAGED ICON FOR THE TRAY
         icon_path = get_resource_path("green_timer.ico")
         if os.path.exists(icon_path):
             self.tray_icon.setIcon(QIcon(icon_path))
@@ -474,7 +480,7 @@ class ProGreenTimer(QMainWindow):
         self.save_config()
 
     def mouseDoubleClickEvent(self, event):
-        if not self.config["ghost_mode"]:
+        if not self.config["ghost_mode"] and self.config["mode"] != "clock":
             self.toggle_timer()
 
     def resizeEvent(self, event):
@@ -577,10 +583,20 @@ class ProGreenTimer(QMainWindow):
         if self.lap_label_visible:
             text_rect.translate(0, -(local_h * 0.1))
 
+        # Calculate Progress appropriately based on mode
         time_val = self.elapsed_time
         if self.config["mode"] == "down":
             time_val = self.config["countdown_start"] - self.elapsed_time
             progress = max(0, time_val) / max(1, self.config["countdown_start"])
+        elif self.config["mode"] == "pomodoro":
+            if self.pomo_state == "work": target = self.config.get("pomo_work", 25) * 60
+            elif self.pomo_state == "break": target = self.config.get("pomo_break", 5) * 60
+            else: target = self.config.get("pomo_long_break", 15) * 60
+            time_val = target - self.elapsed_time
+            progress = max(0, time_val) / max(1, target)
+        elif self.config["mode"] == "clock":
+            t_struct = time.localtime()
+            progress = t_struct.tm_sec / 60.0
         else:
             progress = (time_val % 60) / 60.0
 
@@ -703,10 +719,19 @@ class ProGreenTimer(QMainWindow):
         self.lap_label_visible = False
         self.current_color = QColor(self.config["normal_color"])
         self.last_time_val = None
-        self.update_display(0.0 if self.config["mode"] == "up" else self.config["countdown_start"], is_overdue=False)
+        self.pomo_state = "work"
+        self.pomo_cycle_count = 0
+        
+        if self.config["mode"] == "clock":
+            self.update_clock()
+        elif self.config["mode"] == "pomodoro":
+            target = self.config.get("pomo_work", 25) * 60
+            self.update_display(target, is_overdue=False)
+        else:
+            self.update_display(0.0 if self.config["mode"] == "up" else self.config["countdown_start"], is_overdue=False)
 
     def trigger_lap(self):
-        if self.running:
+        if self.running and self.config["mode"] != "clock":
             self.lap_label_visible = True
             self.lap_text = f"LAP: {self.current_text}"
             self.lap_display_until = time.time() + 4.0
@@ -718,6 +743,15 @@ class ProGreenTimer(QMainWindow):
             self.fluid_phase += 0.05
             self.update()
 
+        # CLOCK MODE LOGIC
+        if self.config["mode"] == "clock":
+            time_str = time.strftime(self.config.get("clock_format", "%H:%M:%S"))
+            if time_str != self.current_text:
+                self.current_text = time_str
+                self.update_window_for_text()
+                self.update()
+            return
+
         if self.running:
             if self.config.get("target_hwnd", 0) != 0:
                 try:
@@ -728,21 +762,57 @@ class ProGreenTimer(QMainWindow):
                     pass
 
             self.elapsed_time = time.time() - self.start_time
-            
             is_overdue = False
-            if self.config["mode"] == "up":
+            
+            # POMODORO LOGIC
+            if self.config["mode"] == "pomodoro":
+                if self.pomo_state == "work": target = self.config.get("pomo_work", 25) * 60
+                elif self.pomo_state == "break": target = self.config.get("pomo_break", 5) * 60
+                else: target = self.config.get("pomo_long_break", 15) * 60
+                
+                time_val = target - self.elapsed_time
+                if time_val <= 0:
+                    if self.config["sound_cue"]:
+                        sound_path = self.config.get("custom_sound_path", "")
+                        if sound_path and os.path.exists(sound_path) and platform.system() == "Windows":
+                            winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                        else:
+                            QApplication.beep()
+                            
+                    if self.pomo_state == "work":
+                        self.pomo_cycle_count += 1
+                        if self.pomo_cycle_count % self.config.get("pomo_cycles", 4) == 0:
+                            self.pomo_state = "long_break"
+                        else:
+                            self.pomo_state = "break"
+                    else:
+                        self.pomo_state = "work"
+                        
+                    self.lap_label_visible = True
+                    self.lap_text = f"AUTO: {self.pomo_state.upper()}"
+                    self.lap_display_until = time.time() + 4.0
+                    
+                    self.start_time = time.time()
+                    self.elapsed_time = 0.0
+                    
+                    if self.pomo_state == "work": time_val = self.config.get("pomo_work", 25) * 60
+                    elif self.pomo_state == "break": time_val = self.config.get("pomo_break", 5) * 60
+                    else: time_val = self.config.get("pomo_long_break", 15) * 60
+            
+            # STANDARD UP/DOWN LOGIC
+            elif self.config["mode"] == "up":
                 time_val = self.elapsed_time
             else:
                 time_val = self.config["countdown_start"] - self.elapsed_time
                 is_overdue = time_val < 0
                 
-            if self.last_time_val is not None and self.last_time_val >= 0 and time_val < 0:
-                if self.config["sound_cue"]:
-                    sound_path = self.config.get("custom_sound_path", "")
-                    if sound_path and os.path.exists(sound_path) and platform.system() == "Windows":
-                        winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-                    else:
-                        QApplication.beep()
+                if self.last_time_val is not None and self.last_time_val >= 0 and time_val < 0:
+                    if self.config["sound_cue"]:
+                        sound_path = self.config.get("custom_sound_path", "")
+                        if sound_path and os.path.exists(sound_path) and platform.system() == "Windows":
+                            winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                        else:
+                            QApplication.beep()
 
             self.update_display(time_val, is_overdue)
             self.last_time_val = time_val
@@ -756,7 +826,7 @@ class ProGreenTimer(QMainWindow):
     def update_display(self, time_val, is_overdue):
         dest_color = QColor(self.config["gray_color"] if is_overdue else self.config["normal_color"])
         
-        if self.config["use_threshold"] and not is_overdue:
+        if self.config["use_threshold"] and not is_overdue and self.config["mode"] != "pomodoro":
             if (self.config["mode"] == "up" and time_val >= self.config["threshold_time"]) or \
                (self.config["mode"] == "down" and time_val <= self.config["threshold_time"]):
                 dest_color = QColor(self.config["gray_color"])
@@ -840,33 +910,48 @@ class SettingsDialog(QDialog):
         
         # --- TAB 1: General & Time ---
         tab_gen = QWidget()
-        form_gen = QFormLayout(tab_gen)
+        self.form_gen = QFormLayout(tab_gen)
         
         self.cb_mode = QComboBox()
-        self.cb_mode.addItems(["up", "down"])
+        self.cb_mode.addItems(["up", "down", "clock", "pomodoro"])
         self.cb_mode.setCurrentText(self.original_config["mode"])
-        form_gen.addRow("Timer Mode:", self.cb_mode)
+        self.form_gen.addRow("Timer Mode:", self.cb_mode)
         
         start_str = self.format_time_str(self.original_config["countdown_start"])
         self.in_cd = QLineEdit(start_str)
         self.in_cd.setPlaceholderText("MM:SS or Seconds")
-        form_gen.addRow("Countdown Start:", self.in_cd)
+        self.form_gen.addRow("Countdown Start:", self.in_cd)
         
+        # Pomodoro UI
+        self.in_pomo_work = QLineEdit(str(self.original_config.get("pomo_work", 25.0)))
+        self.in_pomo_break = QLineEdit(str(self.original_config.get("pomo_break", 5.0)))
+        self.in_pomo_lbreak = QLineEdit(str(self.original_config.get("pomo_long_break", 15.0)))
+        self.in_pomo_cycles = QLineEdit(str(self.original_config.get("pomo_cycles", 4)))
+        self.form_gen.addRow("Pomo Work (Mins):", self.in_pomo_work)
+        self.form_gen.addRow("Pomo Break (Mins):", self.in_pomo_break)
+        self.form_gen.addRow("Pomo Long Break (Mins):", self.in_pomo_lbreak)
+        self.form_gen.addRow("Pomo Cycles before Long Break:", self.in_pomo_cycles)
+
+        # Clock Mode UI
+        self.in_clock_fmt = QLineEdit(self.original_config.get("clock_format", "%H:%M:%S"))
+        self.in_clock_fmt.setPlaceholderText("%H:%M:%S")
+        self.form_gen.addRow("Clock String Format:", self.in_clock_fmt)
+
         self.chk_thresh = QCheckBox("Enable Gray Threshold")
         self.chk_thresh.setChecked(self.original_config["use_threshold"])
-        form_gen.addRow("", self.chk_thresh)
+        self.form_gen.addRow("", self.chk_thresh)
         
         self.in_thresh = QLineEdit(str(self.original_config["threshold_time"]))
-        form_gen.addRow("Threshold Time (s):", self.in_thresh)
+        self.form_gen.addRow("Threshold Time (s):", self.in_thresh)
         
         self.cb_dec = QComboBox()
         self.cb_dec.addItems(["0", "1", "2", "3"])
         self.cb_dec.setCurrentText(str(self.original_config["decimals"]))
-        form_gen.addRow("Decimal Precision:", self.cb_dec)
+        self.form_gen.addRow("Decimal Precision:", self.cb_dec)
         
         self.chk_hours = QCheckBox("Always Show Hours (00:MM:SS)")
         self.chk_hours.setChecked(self.original_config["always_show_hours"])
-        form_gen.addRow("", self.chk_hours)
+        self.form_gen.addRow("", self.chk_hours)
         tabs.addTab(tab_gen, "General")
         
         # --- TAB 2: Appearance & Shapes ---
@@ -995,7 +1080,7 @@ class SettingsDialog(QDialog):
         self.chk_lock.setChecked(self.original_config["window_locked"])
         form_beh.addRow("", self.chk_lock)
         
-        self.chk_sound = QCheckBox("Enable Sound Cue on Zero")
+        self.chk_sound = QCheckBox("Enable Sound Cue on Zero/Auto-Switch")
         self.chk_sound.setChecked(self.original_config["sound_cue"])
         form_beh.addRow("", self.chk_sound)
         
@@ -1105,23 +1190,47 @@ class SettingsDialog(QDialog):
         self.cb_rot.currentTextChanged.connect(self.live_update)
         self.lbl_sprite_path.textChanged.connect(self.live_update)
 
+        self.in_pomo_work.textChanged.connect(self.live_update)
+        self.in_pomo_break.textChanged.connect(self.live_update)
+        self.in_pomo_lbreak.textChanged.connect(self.live_update)
+        self.in_pomo_cycles.textChanged.connect(self.live_update)
+        self.in_clock_fmt.textChanged.connect(self.live_update)
+
         self.update_conditional_settings()
 
     def update_conditional_settings(self):
         display_style = self.cb_display.currentText()
         border_style = self.cb_border.currentText()
+        current_mode = self.cb_mode.currentText()
 
-        def toggle_row(widget, is_visible):
+        def toggle_row(form, widget, is_visible):
             widget.setVisible(is_visible)
-            lbl = self.form_app.labelForField(widget)
+            lbl = form.labelForField(widget)
             if lbl: lbl.setVisible(is_visible)
 
-        toggle_row(self.sl_arc_thick, display_style == "Arc")
-        toggle_row(self.btn_bar_text, display_style == "Bar")
-        toggle_row(self.lbl_sprite_widget, display_style == "Sprite")
+        toggle_row(self.form_app, self.sl_arc_thick, display_style == "Arc")
+        toggle_row(self.form_app, self.btn_bar_text, display_style == "Bar")
+        toggle_row(self.form_app, self.lbl_sprite_widget, display_style == "Sprite")
         
-        toggle_row(self.sl_b_thick, border_style != "None")
-        toggle_row(self.btn_thin_border, border_style == "Thin")
+        toggle_row(self.form_app, self.sl_b_thick, border_style != "None")
+        toggle_row(self.form_app, self.btn_thin_border, border_style == "Thin")
+
+        # Handle Mode Specific Toggles
+        is_pomo = current_mode == "pomodoro"
+        is_clock = current_mode == "clock"
+        is_down = current_mode == "down"
+
+        toggle_row(self.form_gen, self.in_cd, is_down)
+        toggle_row(self.form_gen, self.chk_thresh, not is_clock and not is_pomo)
+        toggle_row(self.form_gen, self.in_thresh, not is_clock and not is_pomo)
+        
+        toggle_row(self.form_gen, self.in_pomo_work, is_pomo)
+        toggle_row(self.form_gen, self.in_pomo_break, is_pomo)
+        toggle_row(self.form_gen, self.in_pomo_lbreak, is_pomo)
+        toggle_row(self.form_gen, self.in_pomo_cycles, is_pomo)
+        
+        toggle_row(self.form_gen, self.in_clock_fmt, is_clock)
+
 
     def live_update(self, *args):
         try:
@@ -1168,6 +1277,13 @@ class SettingsDialog(QDialog):
             self.main_window.config["sound_cue"] = self.chk_sound.isChecked()
             self.main_window.config["auto_check_updates"] = self.chk_auto_update.isChecked()
             self.main_window.config["custom_sound_path"] = self.lbl_sound_path.text()
+
+            # Pomo and Clock
+            self.main_window.config["pomo_work"] = float(self.in_pomo_work.text() or 25.0)
+            self.main_window.config["pomo_break"] = float(self.in_pomo_break.text() or 5.0)
+            self.main_window.config["pomo_long_break"] = float(self.in_pomo_lbreak.text() or 15.0)
+            self.main_window.config["pomo_cycles"] = int(self.in_pomo_cycles.text() or 4)
+            self.main_window.config["clock_format"] = self.in_clock_fmt.text() or "%H:%M:%S"
             
             for k, v in self.hk_widgets.items():
                 self.main_window.config[k] = v["data"]
@@ -1178,7 +1294,10 @@ class SettingsDialog(QDialog):
             if old_rot != new_rot:
                 self.main_window.apply_rotation(new_rot)
 
-            self.main_window.update_display(self.main_window.last_time_val if self.main_window.last_time_val is not None else 0.0, False)
+            if self.main_window.config["mode"] == "clock":
+                self.main_window.update_clock()
+            else:
+                self.main_window.update_display(self.main_window.last_time_val if self.main_window.last_time_val is not None else 0.0, False)
             
             if format_changed or pad_changed:
                 self.main_window.update_window_for_text()
@@ -1309,11 +1428,9 @@ class SettingsDialog(QDialog):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     
-    # Enable High DPI scaling
     if hasattr(Qt.ApplicationAttribute, 'AA_UseHighDpiPixmaps'):
         app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
         
-    # --- LOAD THE ICON FOR WINDOW AND TASKBAR ---
     icon_path = get_resource_path("green_timer.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))

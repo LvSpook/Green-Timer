@@ -76,7 +76,7 @@
  [],
  False,
  False,
- 1785958586,
+ 1785963279,
  [('runw.exe',
    'C:\\Users\\lukev\\Desktop\\Green Timer '
    'source\\venv\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',
