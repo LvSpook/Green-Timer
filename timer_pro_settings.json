@@ -1,0 +1,61 @@
+{
+    "mode": "up",
+    "countdown_start": 60.0,
+    "threshold_time": 60.0,
+    "use_threshold": true,
+    "font_size": 52,
+    "font_family": "Exo",
+    "normal_color": "#00FF66",
+    "gray_color": "#808080",
+    "decimals": 2,
+    "always_show_hours": false,
+    "show_text": true,
+    "hk_toggle": {
+        "name": "f1",
+        "code": 59
+    },
+    "hk_reset": {
+        "name": "f2",
+        "code": 60
+    },
+    "hk_settings": {
+        "name": "f3",
+        "code": 61
+    },
+    "hk_lap": {
+        "name": "space",
+        "code": 57
+    },
+    "hk_ghost": {
+        "name": "f4",
+        "code": 62
+    },
+    "ghost_mode": false,
+    "sound_cue": true,
+    "custom_sound_path": "",
+    "opacity": 1.0,
+    "text_outline": true,
+    "text_outline_color": "#000000",
+    "text_outline_thickness": 2,
+    "theme": "Default",
+    "border_style": "None",
+    "border_thickness": 1,
+    "window_shape": "Rectangular",
+    "display_style": "Text",
+    "sprite_path": "",
+    "arc_thickness": 12,
+    "window_locked": false,
+    "pos_x": 1121,
+    "pos_y": 277,
+    "width": 340,
+    "height": 132,
+    "target_hwnd": 0,
+    "padding": 20,
+    "corner_radius": 15,
+    "window_blur": false,
+    "show_background": true,
+    "thin_border_color": "#FFFFFF",
+    "bar_text_color": "#FFFFFF",
+    "rotation": "0\u00b0",
+    "auto_check_updates": true
+}

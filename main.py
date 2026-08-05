@@ -9,6 +9,7 @@ import platform
 import urllib.request
 import subprocess
 import tempfile
+import pkgutil
 
 if platform.system() == "Windows":
     import winsound
