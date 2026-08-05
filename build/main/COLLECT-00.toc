@@ -706,6 +706,9 @@
    'C:\\Users\\lukev\\Desktop\\Green Timer '
    'source\\build\\main\\base_library.zip',
    'DATA'),
+  ('green_timer.ico',
+   'C:\\Users\\lukev\\Desktop\\Green Timer source\\green_timer.ico',
+   'DATA'),
   ('libcrypto-3.dll',
    'C:\\Users\\lukev\\AppData\\Local\\Programs\\Python\\Python314\\DLLs\\libcrypto-3.dll',
    'BINARY'),

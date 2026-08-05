@@ -2,8 +2,7 @@
  False,
  False,
  True,
- 'C:\\Users\\lukev\\Desktop\\Green Timer '
- 'source\\venv\\Lib\\site-packages\\PyInstaller\\bootloader\\images\\icon-windowed.ico',
+ ['C:\\Users\\lukev\\Desktop\\Green Timer source\\green_timer.ico'],
  None,
  False,
  False,
@@ -77,7 +76,7 @@
  [],
  False,
  False,
- 1785954114,
+ 1785958586,
  [('runw.exe',
    'C:\\Users\\lukev\\Desktop\\Green Timer '
    'source\\venv\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',

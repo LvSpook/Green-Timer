@@ -21,7 +21,17 @@ from PyQt6.QtWidgets import (
     QSystemTrayIcon, QMenu, QSlider, QStyle, QFontDialog, QFileDialog
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QRectF, QThread
-from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QAction, QFontMetrics, QPainterPath, QBrush, QPixmap, QImage
+from PyQt6.QtGui import QFont, QColor, QPainter, QPen, QAction, QFontMetrics, QPainterPath, QBrush, QPixmap, QImage, QIcon
+
+# --- HELPER FOR PYINSTALLER RESOURCE PATHS ---
+def get_resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 # --- APP VERSION & GITHUB REPO CONFIG ---
 APP_VERSION = "v1.0.0"
@@ -78,7 +88,7 @@ DEFAULT_CONFIG = {
 
 # --- AUTO UPDATER THREAD ---
 class UpdateCheckerThread(QThread):
-    update_available = pyqtSignal(str, str) # tag_name, download_url
+    update_available = pyqtSignal(str, str)
 
     def run(self):
         if GITHUB_REPO == "YourUsername/YourRepoName":
@@ -201,7 +211,6 @@ class ProportionalSizeGrip(QWidget):
         path.lineTo(0, self.height())
         painter.drawPath(path)
 
-
 class ProGreenTimer(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -290,10 +299,7 @@ class ProGreenTimer(QMainWindow):
             temp_dir = tempfile.gettempdir()
             installer_path = os.path.join(temp_dir, "ProTimer_Setup.exe")
             
-            # Download installer
             urllib.request.urlretrieve(url, installer_path)
-            
-            # Launch installer and terminate current application
             subprocess.Popen([installer_path])
             QApplication.quit()
         except Exception as e:
@@ -332,8 +338,13 @@ class ProGreenTimer(QMainWindow):
 
     def setup_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
-        icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
-        self.tray_icon.setIcon(icon)
+        
+        # USE THE PACKAGED ICON FOR THE TRAY
+        icon_path = get_resource_path("green_timer.ico")
+        if os.path.exists(icon_path):
+            self.tray_icon.setIcon(QIcon(icon_path))
+        else:
+            self.tray_icon.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
         
         menu = QMenu()
         act_settings = QAction("Settings", self)
@@ -344,6 +355,7 @@ class ProGreenTimer(QMainWindow):
         menu.addAction(act_settings)
         menu.addAction(act_exit)
         self.tray_icon.setContextMenu(menu)
+        self.tray_icon.setToolTip("Pro Green Timer")
         self.tray_icon.show()
 
     def setup_hotkeys(self):
@@ -1296,8 +1308,16 @@ class SettingsDialog(QDialog):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    # Enable High DPI scaling
     if hasattr(Qt.ApplicationAttribute, 'AA_UseHighDpiPixmaps'):
         app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps)
+        
+    # --- LOAD THE ICON FOR WINDOW AND TASKBAR ---
+    icon_path = get_resource_path("green_timer.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
+        
     timer = ProGreenTimer()
     timer.show()
     sys.exit(app.exec())
