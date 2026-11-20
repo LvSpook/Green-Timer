@@ -52,6 +52,10 @@ Set `RUST_LOG=GreenTimer=debug` (or `info`) for verbose logging.
 | Settings | `%APPDATA%\GreenTimer\timer_pro_settings.json` |
 | Logs | `%APPDATA%\GreenTimer\logs\green_timer.log` |
 
+Release builds are GUI-only, so no console window appears when the app starts.
+Logs are written to the file above (rolled over to `green_timer.log.old` once it
+passes 1 MB); `cargo run` in a debug build also prints them to the terminal.
+
 On first launch an older `timer_pro_settings.json` next to the executable is
 migrated automatically. A corrupted settings file falls back to defaults field
 by field instead of crashing the app.

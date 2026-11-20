@@ -665,6 +665,10 @@ pub fn measure_text(
 }
 
 /// Window size needed to display `text` with `padding`.
+///
+/// A little is added to the measured galley because its rect is the *layout*
+/// box: glyph ink (round bowls, descenders) can overshoot it slightly, and
+/// without the margin a zero-padding window clips the text.
 pub fn text_box_metrics(
     ctx: &egui::Context,
     family: &FontFamily,
@@ -675,8 +679,9 @@ pub fn text_box_metrics(
 ) -> Vec2 {
     let measured = measure_text(ctx, family, text, size);
     let pad = padding as f32 * 2.0;
-    let width = measured.x + pad;
-    let mut height = measured.y + pad;
+    let margin = (size * 0.12).max(2.0) * 2.0;
+    let width = measured.x + pad + margin;
+    let mut height = measured.y + pad + margin;
     if lap_visible {
         height += measured.y * 0.55;
     }

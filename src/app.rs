@@ -271,8 +271,13 @@ impl TimerApp {
             self.fade_from = self.display_color;
             self.fade_started = Some(Instant::now());
         }
-        if snapshot.text_length_changed {
-            self.config.width = self.config.width.max(1);
+        if snapshot.text_length_changed
+            && self.config.display_style == crate::config::DisplayStyle::Text
+            && !self.config.window_locked
+        {
+            // Like the original, the window hugs the text as its length changes.
+            // Other styles own their own geometry, so they are left alone.
+            self.resize_for_text();
         }
         self.snapshot = snapshot;
     }
