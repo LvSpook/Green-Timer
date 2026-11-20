@@ -97,6 +97,24 @@ mod imp {
         unsafe { GetForegroundWindow().0 as u64 }
     }
 
+    /// Native yes/no prompt. Lives here because it needs the wide-string helper.
+    pub fn confirm(title: &str, text: &str) -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            MessageBoxW, IDYES, MB_DEFBUTTON2, MB_ICONQUESTION, MB_YESNO,
+        };
+        let title = wide(title);
+        let text = wide(text);
+        let result = unsafe {
+            MessageBoxW(
+                None,
+                PCWSTR(text.as_ptr()),
+                PCWSTR(title.as_ptr()),
+                MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
+            )
+        };
+        result == IDYES
+    }
+
     /// Play a WAV file asynchronously, or the OS alert when no file is usable.
     pub fn play_sound(path: &str) {
         if !path.is_empty() && std::path::Path::new(path).is_file() {
@@ -151,6 +169,17 @@ pub fn apply_blur(window: isize, enable: bool) {
 
 pub fn set_dark_title_bar(window: isize, enabled: bool) {
     imp::set_dark_title_bar(window, enabled);
+}
+
+/// Ask the user a yes/no question in a native message box.
+#[cfg(windows)]
+pub fn confirm(title: &str, text: &str) -> bool {
+    imp::confirm(title, text)
+}
+
+#[cfg(not(windows))]
+pub fn confirm(_title: &str, _text: &str) -> bool {
+    false
 }
 
 /// Handle of the window that currently has keyboard focus (0 if unknown).

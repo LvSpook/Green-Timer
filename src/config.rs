@@ -169,7 +169,7 @@ impl Hotkey {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     #[serde(deserialize_with = "lenient")]

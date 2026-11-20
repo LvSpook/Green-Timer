@@ -238,7 +238,10 @@ impl<C: Clock> TimerEngine<C> {
 
         if config.mode == Mode::Clock {
             let text = format_clock(&config.clock_format);
-            return self.build(text, 0.0, ColorRole::Normal, events);
+            // The progress indicator shows how far through the current minute
+            // the wall clock is, so arcs and bars sweep once per minute.
+            let second = chrono_lite::LocalTime::now().second() as f32;
+            return self.build(text, second / 60.0, ColorRole::Normal, events);
         }
 
         let (progress, value, overdue);
@@ -337,6 +340,10 @@ impl<C: Clock> TimerEngine<C> {
 
     /// Latest rendered text (used for lap labels and window sizing).
     pub fn current_text(&self, config: &Config) -> String {
+        // The clock changes every second, so cached text would go stale.
+        if config.mode == Mode::Clock {
+            return format_clock(&config.clock_format);
+        }
         if !self.last_text.is_empty() {
             return self.last_text.clone();
         }
@@ -380,6 +387,10 @@ mod chrono_lite {
             Self::from_unix(unix)
         }
 
+        pub fn second(&self) -> u32 {
+            self.second
+        }
+
         pub fn from_unix(unix: i64) -> Self {
             // Local offset is obtained from the OS so DST is handled correctly.
             let offset = local_offset_seconds(unix);
@@ -418,15 +429,31 @@ mod chrono_lite {
                 }
                 match chars.next() {
                     Some('H') => out.push_str(&format!("{:02}", self.hour)),
+                    Some('k') => out.push_str(&format!("{:2}", self.hour)),
                     Some('I') => out.push_str(&format!("{:02}", self.hour12)),
+                    Some('l') => out.push_str(&format!("{:2}", self.hour12)),
                     Some('M') => out.push_str(&format!("{:02}", self.minute)),
                     Some('S') => out.push_str(&format!("{:02}", self.second)),
                     Some('p') => out.push_str(if self.am { "AM" } else { "PM" }),
+                    Some('P') => out.push_str(if self.am { "am" } else { "pm" }),
                     Some('Y') => out.push_str(&format!("{:04}", self.year)),
+                    Some('y') => out.push_str(&format!("{:02}", self.year % 100)),
                     Some('m') => out.push_str(&format!("{:02}", self.month)),
                     Some('d') => out.push_str(&format!("{:02}", self.day)),
+                    Some('e') => out.push_str(&format!("{:2}", self.day)),
+                    Some('b') => out.push_str(MONTHS[self.month as usize - 1].0),
+                    Some('h') => out.push_str(MONTHS[self.month as usize - 1].0),
+                    Some('B') => out.push_str(MONTHS[self.month as usize - 1].1),
                     Some('A') => out.push_str(WEEKDAYS[self.weekday as usize]),
                     Some('a') => out.push_str(&WEEKDAYS[self.weekday as usize][..3]),
+                    Some('j') => {
+                        let doy = day_of_year(self.year, self.month, self.day);
+                        out.push_str(&format!("{doy:03}"));
+                    }
+                    Some('u') => out.push_str(&format!("{}", if self.weekday == 0 { 7 } else { self.weekday })),
+                    Some('w') => out.push_str(&format!("{}", self.weekday)),
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
                     Some('%') => out.push('%'),
                     Some(other) => {
                         out.push('%');
@@ -442,6 +469,38 @@ mod chrono_lite {
     const WEEKDAYS: [&str; 7] = [
         "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
     ];
+
+    /// `(abbreviation, full name)` for each month, January first.
+    const MONTHS: [(&str, &str); 12] = [
+        ("Jan", "January"),
+        ("Feb", "February"),
+        ("Mar", "March"),
+        ("Apr", "April"),
+        ("May", "May"),
+        ("Jun", "June"),
+        ("Jul", "July"),
+        ("Aug", "August"),
+        ("Sep", "September"),
+        ("Oct", "October"),
+        ("Nov", "November"),
+        ("Dec", "December"),
+    ];
+
+    /// 1-based day of the year, accounting for leap years.
+    fn day_of_year(year: u32, month: u32, day: u32) -> u32 {
+        const DAYS: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        let mut total = day;
+        for (index, days) in DAYS.iter().enumerate() {
+            if index + 1 < month as usize {
+                total += days;
+                if index == 1 && leap {
+                    total += 1;
+                }
+            }
+        }
+        total
+    }
 
     /// Days-to-civil conversion (Howard Hinnant's algorithm).
     fn civil_from_days(z: i64) -> (u32, u32, u32) {

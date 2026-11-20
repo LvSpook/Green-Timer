@@ -36,6 +36,8 @@ pub struct TimerApp {
     /// Update check result channel, if a check is running.
     pub update_rx: Option<std::sync::mpsc::Receiver<Option<updater::UpdateInfo>>>,
     pub update_available: Option<updater::UpdateInfo>,
+    /// Installer download channel, if a download is running.
+    install_rx: Option<std::sync::mpsc::Receiver<Result<std::path::PathBuf, String>>>,
     show_window: bool,
     quit: bool,
     /// Size at which the current grip drag began (logical px).
@@ -92,6 +94,7 @@ impl TimerApp {
             applied: AppliedState::default(),
             update_rx,
             update_available: None,
+            install_rx: None,
             quit: false,
             grip_start: None,
         }
@@ -123,9 +126,31 @@ impl TimerApp {
         self.persist();
     }
 
-    pub fn persist(&self) {
+    pub fn persist(&mut self) {
+        self.sync_geometry();
         if let Err(err) = config::save(&self.config) {
             log::warn!("Settings could not be persisted: {err}");
+        }
+    }
+
+    /// Record the window's current position and size, like the original did
+    /// whenever it saved. Dragging is delegated to the OS, so the config would
+    /// otherwise keep the position from the last launch.
+    fn sync_geometry(&mut self) {
+        let Some(ctx) = self::current_context() else {
+            return;
+        };
+        let (outer, inner) = ctx.input(|i| {
+            let viewport = i.viewport();
+            (viewport.outer_rect, viewport.inner_rect)
+        });
+        if let Some(outer) = outer {
+            self.config.pos_x = outer.min.x.round() as i32;
+            self.config.pos_y = outer.min.y.round() as i32;
+        }
+        if let Some(inner) = inner {
+            self.config.width = inner.width().round().max(1.0) as u32;
+            self.config.height = inner.height().round().max(1.0) as u32;
         }
     }
 
@@ -225,8 +250,8 @@ impl TimerApp {
             &family,
             &text,
             text_width,
-            8.0,
-            self.config.font_size.max(8) as f32 * 3.0,
+            4.0,
+            500.0,
         );
         self.font_size = size;
         self.config.font_size = size.round() as u32;
@@ -369,9 +394,73 @@ impl TimerApp {
         if let Ok(result) = rx.try_recv() {
             if let Some(info) = result {
                 log::info!("Update available: {}", info.latest);
-                self.update_available = Some(info);
+                if platform::confirm(
+                    "Update Available",
+                    &format!(
+                        "{APP_NAME} {} is available (you have {}).\n\n\
+                         Download and run the installer now?",
+                        info.latest, APP_VERSION
+                    ),
+                ) {
+                    self.install_update(&info.url);
+                } else {
+                    // Declined: keep it available in the About tab.
+                    self.update_available = Some(info);
+                }
             }
             self.update_rx = None;
+        }
+    }
+
+    /// Download the installer to the temp directory, start it, and exit so it
+    /// can replace this executable — the original updater's flow.
+    ///
+    /// Downloading runs on a background thread; the result is handed straight
+    /// to the event loop so the overlay never blocks on the network.
+    pub fn install_update(&mut self, url: &str) {
+        self.persist();
+        log::info!("Downloading update from {url}");
+        let url = url.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(updater::download_installer(&url));
+        });
+        self.install_rx = Some(rx);
+    }
+
+    fn poll_install(&mut self) {
+        let Some(rx) = &self.install_rx else {
+            return;
+        };
+        // Keep the loop awake while the download is in flight.
+        if let Some(ctx) = current_context() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        let Ok(result) = rx.try_recv() else {
+            return;
+        };
+        self.install_rx = None;
+        match result {
+            Ok(path) => match std::process::Command::new(&path).spawn() {
+                Ok(_) => {
+                    log::info!("Installer launched from {}", path.display());
+                    std::process::exit(0);
+                }
+                Err(err) => {
+                    log::warn!("Could not start the installer: {err}");
+                    platform::confirm(
+                        "Update Error",
+                        &format!("Could not start the installer:\n{err}"),
+                    );
+                }
+            },
+            Err(err) => {
+                log::warn!("Update download failed: {err}");
+                platform::confirm(
+                    "Update Error",
+                    &format!("Could not download the update:\n{err}"),
+                );
+            }
         }
     }
 }
@@ -385,6 +474,21 @@ thread_local! {
 /// The current egui context, if the app has started a frame.
 pub fn current_context() -> Option<egui::Context> {
     CURRENT_CTX.with(|cell| cell.borrow().clone())
+}
+
+thread_local! {
+    /// Installer URL requested from the settings window, picked up by the
+    /// app on its next frame so the download does not block the dialog.
+    static PENDING_INSTALL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Ask the app to download and run an installer for `url`.
+pub fn request_install(url: &str) {
+    PENDING_INSTALL.with(|cell| *cell.borrow_mut() = Some(url.to_string()));
+}
+
+fn take_pending_install() -> Option<String> {
+    PENDING_INSTALL.with(|cell| cell.borrow_mut().take())
 }
 
 impl eframe::App for TimerApp {
@@ -404,6 +508,10 @@ impl eframe::App for TimerApp {
         CURRENT_CTX.with(|cell| *cell.borrow_mut() = Some(ctx.clone()));
 
         self.poll_updates();
+        self.poll_install();
+        if let Some(url) = take_pending_install() {
+            self.install_update(&url);
+        }
         self.handle_input(ctx);
         self.tick();
         self.display_color = self.current_color();

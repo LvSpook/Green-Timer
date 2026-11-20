@@ -18,6 +18,9 @@ use egui::{Color32, FontFamily, FontId, Pos2, Rect, Rounding, Stroke, Vec2};
 use std::sync::Arc;
 
 pub const CHALK_BOARD: Rgb = Rgb(46, 68, 50);
+/// The faint chalk fill the original declared; actual chalk text is painted in
+/// the timer colour, so this is kept only to document the original palette.
+#[allow(dead_code)]
 pub const CHALK_TEXT: Rgb = Rgb(240, 255, 240);
 
 /// Decoded sprite image plus its recoloured variant.
@@ -225,18 +228,26 @@ pub fn draw_text(
     let center = orientation.point(center);
 
     if config.theme == Theme::Chalkboard {
-        // Chalk rubbed onto the board: a soft dark halo, then the faint chalk.
-        for (dx, dy) in [(-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (0.0, 2.0), (2.0, 0.0)]
-        {
+        // Chalk rubbed onto the board: seven offset, low-opacity passes then a
+        // faint solid layer, matching the original's dusty look.
+        for (dx, dy, alpha) in [
+            (-1.0, -1.0, 40),
+            (1.0, 1.0, 40),
+            (-1.0, 1.0, 40),
+            (1.0, -1.0, 40),
+            (0.0, 0.0, 90),
+            (0.0, 2.0, 60),
+            (2.0, 0.0, 60),
+        ] {
             paint_galley(
                 painter,
                 &galley,
                 center + orientation.vector(Vec2::new(dx, dy)),
-                Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), 40),
+                Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), alpha),
                 orientation.angle,
             );
         }
-        paint_galley(painter, &galley, center, to_color32(CHALK_TEXT, 70), orientation.angle);
+        paint_galley(painter, &galley, center, fill, orientation.angle);
         return;
     }
 
@@ -392,7 +403,10 @@ fn draw_arc(
 ) {
     let dim = rect.width().min(rect.height());
     let thickness = config.arc_thickness;
-    let radius = (dim - thickness) / 2.0;
+    // Qt draws the arc on a `dim x dim` square with the pen centred on the
+    // path, so the path radius is half the dimension (the outer half of the
+    // stroke is clipped by the panel, exactly as the original did).
+    let radius = dim / 2.0;
     if radius <= 0.0 {
         return;
     }
@@ -428,25 +442,25 @@ fn draw_bar(
     color: Color32,
     orientation: Orientation,
 ) {
-    let width = rect.width() * progress.clamp(0.0, 1.0);
-    if width <= 0.0 {
+    let right = rect.left() + rect.width() * progress.clamp(0.0, 1.0);
+    if right <= rect.left() + 0.5 {
         return;
     }
-    let fill = Rect::from_min_size(rect.min, Vec2::new(width, rect.height()));
-    let radius = corner_radius(config, rect);
+    let radius = corner_radius(config, rect)
+        .min(rect.width() / 2.0)
+        .min(rect.height() / 2.0);
 
-    // The rounded container only rounds the corners the fill actually reaches:
-    // the left edge is rounded when the fill starts at the left, and the right
-    // edge only once the fill is (almost) complete.
-    let at_left = fill.left() <= rect.left() + 0.5;
-    let at_right = fill.right() >= rect.right() - 0.5;
-    let points = rounded_rect_points(
-        fill,
-        if at_left { radius } else { 0.0 },
-        if at_right { radius } else { 0.0 },
-        if at_right { radius } else { 0.0 },
-        if at_left { radius } else { 0.0 },
-    );
+    // The original intersected a full-height fill rectangle with the rounded
+    // panel, so the visible shape is the container outline cut off at the
+    // progress line: the left edge keeps the panel's real corner curves even
+    // when the fill is narrower than the corner radius, and the right edge is
+    // a straight vertical line until the bar completes.
+    let mut points = rounded_rect_points(rect, radius, radius, radius, radius);
+    if right < rect.right() - 0.5 {
+        for point in &mut points {
+            point.x = point.x.min(right);
+        }
+    }
     fill_polygon(painter, points, color, orientation);
 }
 
@@ -463,46 +477,58 @@ fn draw_fluid(
 ) {
     let surface = rect.bottom() - rect.height() * progress.clamp(0.0, 1.0);
     let amplitude = (rect.height() / 8.0).min(6.0);
-    let step = (rect.width() / 160.0).clamp(1.0, 4.0);
+    // Matches the original's sampling density (`width / 240`, at least 1 px).
+    let step = (rect.width() / 240.0).max(1.0);
     let radius = corner_radius(config, rect)
         .min(rect.width() / 2.0)
         .min(rect.height() / 2.0);
 
-    // The wave is a single polygon: the wavy surface across the top, then down
-    // the right edge and back along the bottom, with the bottom corners
-    // following the panel's curve so the fill never bleeds outside it.
-    let mut points: Vec<Pos2> = Vec::with_capacity(200);
+    // The figure is concave wherever the sine dips, and `convex_polygon` would
+    // drop those dents, so it is tessellated as a strip: for every x there is
+    // one vertex on the wavy surface and one on the panel's bottom edge (which
+    // follows the rounded corners). Two triangles join each pair of columns.
+    let mut samples = Vec::with_capacity(300);
     let mut x = rect.left();
     while x < rect.right() {
-        let y = (surface + (x * 0.05 + phase).sin() * amplitude).clamp(rect.top(), rect.bottom());
-        points.push(Pos2::new(x, y));
+        samples.push(x);
         x += step;
     }
-    points.push(Pos2::new(
-        rect.right(),
-        (surface + (rect.right() * 0.05 + phase).sin() * amplitude)
-            .clamp(rect.top(), rect.bottom()),
-    ));
+    samples.push(rect.right());
 
-    // Bottom-right corner, right-to-left along the bottom edge.
-    points.extend(arc_points(
-        Pos2::new(rect.right() - radius, rect.bottom() - radius),
-        radius,
-        0.0,
-        std::f32::consts::FRAC_PI_2,
-    ));
-    // Bottom-left corner.
-    points.extend(arc_points(
-        Pos2::new(rect.left() + radius, rect.bottom() - radius),
-        radius,
-        std::f32::consts::FRAC_PI_2,
-        std::f32::consts::PI,
-    ));
-
-    if radius <= 0.5 {
-        points.push(Pos2::new(rect.left(), rect.bottom()));
+    let mut mesh = egui::Mesh::default();
+    for &x in &samples {
+        let top = Pos2::new(
+            x,
+            (surface + (x * 0.05 + phase).sin() * amplitude).clamp(rect.top(), rect.bottom()),
+        );
+        let bottom = Pos2::new(x, bottom_edge_y(rect, radius, x));
+        mesh.colored_vertex(orientation.point(top), color);
+        mesh.colored_vertex(orientation.point(bottom), color);
     }
-    fill_polygon(painter, points, color, orientation);
+    for index in 0..samples.len().saturating_sub(1) {
+        let base = index as u32 * 2;
+        mesh.add_triangle(base, base + 1, base + 2);
+        mesh.add_triangle(base + 2, base + 1, base + 3);
+    }
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+/// The lowest visible y at `x` for a rectangle whose bottom corners are
+/// rounded by `radius`. Used to keep the fluid fill inside the panel shape.
+fn bottom_edge_y(rect: Rect, radius: f32, x: f32) -> f32 {
+    if radius <= 0.5 {
+        return rect.bottom();
+    }
+    let centre_x = if x < rect.left() + radius {
+        rect.left() + radius
+    } else if x > rect.right() - radius {
+        rect.right() - radius
+    } else {
+        return rect.bottom();
+    };
+    let dx = (x - centre_x).abs().min(radius);
+    let centre_y = rect.bottom() - radius;
+    centre_y + (radius * radius - dx * dx).max(0.0).sqrt()
 }
 
 /// Draw the sprite style: greyscale image with the coloured image revealed
