@@ -1,0 +1,30 @@
+# Rust build output
+/target/
+
+# Installer output
+Output/
+
+# Staged distribution directory
+dist/
+
+# Local settings created at runtime (user data lives in %APPDATA%)
+timer_pro_settings.json
+
+# Python reference implementation leftovers
+legacy-python/**/__pycache__/
+legacy-python/**/*.py[cod]
+legacy-python/**/.venv/
+legacy-python/**/build/
+legacy-python/**/dist/
+legacy-python/**/Output/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+*.spec.bak
+
+# OS cruft
+.DS_Store
+Thumbs.db

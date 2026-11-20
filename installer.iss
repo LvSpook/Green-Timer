@@ -1,48 +1,58 @@
+; Green Timer - Inno Setup script
+; Build the app first:  powershell -ExecutionPolicy Bypass -File build.ps1
+; (or: cargo build --release, then copy target\release\GreenTimer.exe plus
+; green_timer.ico into dist\GreenTimer\)
+; Then compile this file with Inno Setup 6.
+;
+; Paths are relative to this script, so the project can be moved or cloned
+; anywhere without editing them.
+
+#define AppName "Green Timer"
+#define AppVersion "1.2.0"
+#define AppPublisher "Luke V"
+#define AppExeName "GreenTimer.exe"
+
 [Setup]
-; --- Application Details ---
-AppName=Green Timer
-AppVersion=1.0.0
-AppPublisher=Luke V
-; Default installation folder
-DefaultDirName={autopf}\Green Timer
-DefaultGroupName=Green Timer
-
-; --- Output Settings ---
-; Where the final Setup.exe will be saved
-OutputDir=C:\Users\lukev\Desktop\Green Timer source\Output
-OutputBaseFilename=GreenTimer_Setup_v1.0.0
-Compression=lzma
+AppId={{8F3C2B71-5A4D-4E2A-9C19-5E6F7A8B9C01}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppPublisher={#AppPublisher}
+DefaultDirName={autopf}\{#AppName}
+DefaultGroupName={#AppName}
+UninstallDisplayIcon={app}\{#AppExeName}
+OutputDir=Output
+OutputBaseFilename=GreenTimer_Setup_v{#AppVersion}
+Compression=lzma2/ultra64
 SolidCompression=yes
-
-; This allows the app to install without requiring Admin permissions
+WizardStyle=modern
+; Must match the app: it installs per-user and never needs elevation.
 PrivilegesRequired=lowest
-
-; *** NEW: This sets the icon of the SETUP.EXE installer itself ***
-SetupIconFile=C:\Users\lukev\Desktop\Green Timer source\green_timer.ico
+PrivilegesRequiredOverridesAllowed=dialog
+SetupIconFile=green_timer.ico
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+DisableProgramGroupPage=yes
+CloseApplications=yes
+RestartApplications=no
 
 [Tasks]
-; Creates a checkbox during install for a desktop shortcut
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "startupicon"; Description: "Start Green Timer when I sign in"; GroupDescription: "Startup:"; Flags: unchecked
 
 [Files]
-; Grabs your working executable from the dist/main folder
-Source: "C:\Users\lukev\Desktop\Green Timer source\dist\main\main.exe"; DestDir: "{app}"; Flags: ignoreversion
-
-; *** NEW: This copies the .ico file into the installation folder so the shortcuts can find it ***
-Source: "C:\Users\lukev\Desktop\Green Timer source\green_timer.ico"; DestDir: "{app}"; Flags: ignoreversion
-
-; Grabs ALL the extra DLLs and folders next to the executable and packages them together
-Source: "C:\Users\lukev\Desktop\Green Timer source\dist\main\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\GreenTimer\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\GreenTimer\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "green_timer.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-; *** MODIFIED: These lines now use the IconFilename parameter to point to the copied icon ***
-
-; Creates the start menu icon with the custom icon
-Name: "{group}\Green Timer"; Filename: "{app}\main.exe"; IconFilename: "{app}\green_timer.ico"
-
-; Creates the desktop icon with the custom icon
-Name: "{autodesktop}\Green Timer"; Filename: "{app}\main.exe"; Tasks: desktopicon; IconFilename: "{app}\green_timer.ico"
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\green_timer.ico"
+Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\green_timer.ico"; Tasks: desktopicon
+Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: startupicon
 
 [Run]
-; Gives the user an option to launch the app immediately after installing
-Filename: "{app}\main.exe"; Description: "{cm:LaunchProgram,Green Timer}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[UninstallDelete]
+; Settings live in %APPDATA% and are intentionally preserved on uninstall.
+Type: filesandordirs; Name: "{app}"
