@@ -42,6 +42,10 @@ pub struct TimerApp {
     quit: bool,
     /// Size at which the current grip drag began (logical px).
     grip_start: Option<egui::Vec2>,
+    /// Last profile activated automatically by a per-app rule.
+    last_auto_profile: Option<String>,
+    /// Saved font size before entering compact mini-mode.
+    pre_mini_font_size: Option<u32>,
 }
 
 #[derive(Default, Clone, PartialEq)]
@@ -61,13 +65,16 @@ impl TimerApp {
         let mut hotkeys = HotkeyManager::new();
         hotkeys.rebind(&config);
 
-        let tray = Tray::new();
+        let tray = Tray::new(&config);
         if tray.is_available() == false {
             log::info!("Running without a tray icon");
         }
 
         let textures = render::load_textures(&cc.egui_ctx, &config.sprite_path);
-        let engine = TimerEngine::new(crate::engine::RealClock);
+        let mut engine = TimerEngine::new(crate::engine::RealClock);
+        if config.auto_start_on_launch && !matches!(config.mode, Mode::Clock | Mode::TargetTime) {
+            engine.start(&config);
+        }
         let snapshot = Snapshot::default();
         let display_color = render::target_color(&config, ColorRole::Normal);
 
@@ -78,7 +85,7 @@ impl TimerApp {
         };
 
         TimerApp {
-            show_window: !config.start_minimized,
+            show_window: !config.start_minimized || !tray.is_available(),
             font_size: config.font_size as f32,
             config,
             engine,
@@ -97,12 +104,14 @@ impl TimerApp {
             install_rx: None,
             quit: false,
             grip_start: None,
+            last_auto_profile: None,
+            pre_mini_font_size: None,
         }
     }
 
     // -- actions ---------------------------------------------------------
     pub fn toggle(&mut self) {
-        if self.config.mode == Mode::Clock {
+        if matches!(self.config.mode, Mode::Clock | Mode::TargetTime) {
             return;
         }
         self.engine.toggle(&self.config);
@@ -112,6 +121,40 @@ impl TimerApp {
     pub fn reset(&mut self) {
         self.engine.reset();
         self.tick();
+    }
+
+    pub fn adjust_time(&mut self, delta_seconds: f64) {
+        self.engine.adjust_time(&self.config, delta_seconds);
+        self.tick();
+    }
+
+    pub fn toggle_mini_mode(&mut self) {
+        self.config.mini_mode = !self.config.mini_mode;
+        if self.config.mini_mode {
+            self.pre_mini_font_size = Some(self.config.font_size);
+            self.config.font_size = 18;
+            self.font_size = 18.0;
+        } else if let Some(prev) = self.pre_mini_font_size.take() {
+            self.config.font_size = prev;
+            self.font_size = prev as f32;
+        }
+        self.resize_for_text();
+        self.persist();
+    }
+
+    pub fn apply_profile(&mut self, name: &str) {
+        if self.config.apply_profile(name) {
+            self.font_size = self.config.font_size as f32;
+            self.hotkeys.rebind(&self.config);
+            if let Some(ctx) = current_context() {
+                fonts::install(&ctx, &self.config.font_family);
+                self.textures = render::load_textures(&ctx, &self.config.sprite_path);
+            }
+            self.display_color = render::target_color(&self.config, self.snapshot.color_role);
+            self.resize_for_text();
+            self.tick();
+            self.persist();
+        }
     }
 
     pub fn trigger_lap(&mut self) {
@@ -159,9 +202,10 @@ impl TimerApp {
     }
 
     pub fn apply_appearance(&mut self) {
-        self.config.font_family = self.config.font_family.clone();
+        let was_vertical = self.applied.vertical;
+        self.tray.set_theme(&self.config);
         self.sync_platform();
-        if self.config.rotation.is_vertical() {
+        if self.config.rotation.is_vertical() != was_vertical {
             self.resize_for_text();
         }
     }
@@ -278,11 +322,31 @@ impl TimerApp {
     fn tick(&mut self) {
         let snapshot = self.engine.tick(&self.config);
 
-        // Auto-pause when a target window is configured and focus leaves it.
-        if self.engine.running() && self.config.target_hwnd != 0 {
+        // Auto-pause when a target window is configured and focus leaves it,
+        // and per-app auto-switch profiles when a rule matches.
+        if (self.engine.running() && self.config.target_hwnd != 0)
+            || !self.config.app_profile_rules.is_empty()
+        {
             let current = platform::foreground_window();
-            if current != 0 && current != self.config.target_hwnd {
-                self.engine.pause();
+            if current != 0 {
+                if self.engine.running()
+                    && self.config.target_hwnd != 0
+                    && current != self.config.target_hwnd
+                {
+                    self.engine.pause();
+                }
+                if let Some(profile_name) = self
+                    .config
+                    .app_profile_rules
+                    .iter()
+                    .find(|r| r.target_hwnd == current)
+                    .map(|r| r.profile_name.clone())
+                {
+                    if self.last_auto_profile.as_deref() != Some(profile_name.as_str()) {
+                        self.last_auto_profile = Some(profile_name.clone());
+                        self.apply_profile(&profile_name);
+                    }
+                }
             }
         }
 
@@ -332,12 +396,20 @@ impl TimerApp {
                 Action::Settings => self.settings.open = true,
                 Action::Lap => self.trigger_lap(),
                 Action::Ghost => self.toggle_ghost(),
+                Action::ToggleVisibility => {
+                    self.show_window = !self.show_window;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.show_window));
+                }
+                Action::ToggleMiniMode => self.toggle_mini_mode(),
             }
         }
         for command in self.tray.poll() {
             match command {
                 TrayCommand::Toggle => self.toggle(),
                 TrayCommand::Reset => self.reset(),
+                TrayCommand::Lap => self.trigger_lap(),
+                TrayCommand::ToggleMiniMode => self.toggle_mini_mode(),
+                TrayCommand::ToggleGhost => self.toggle_ghost(),
                 TrayCommand::Settings => self.settings.open = true,
                 TrayCommand::ToggleVisibility => {
                     self.show_window = !self.show_window;
@@ -351,12 +423,16 @@ impl TimerApp {
             // Handled by the settings window / banner.
         }
 
-        // Escape quits, matching the original.
-        if self.show_window
-            && !self.config.ghost_mode
-            && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        {
-            self.request_quit(ctx);
+        // Escape quits and Space toggles, matching the original. While the
+        // menu is open it owns the keyboard, so presses must not leak through.
+        if self.show_window && !self.config.ghost_mode && !crate::menu::is_open() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.request_quit(ctx);
+            } else if self.config.mode != Mode::Clock
+                && ctx.input(|i| i.key_pressed(egui::Key::Space))
+            {
+                self.toggle();
+            }
         }
     }
 
@@ -448,7 +524,7 @@ impl TimerApp {
                 }
                 Err(err) => {
                     log::warn!("Could not start the installer: {err}");
-                    platform::confirm(
+                    platform::alert(
                         "Update Error",
                         &format!("Could not start the installer:\n{err}"),
                     );
@@ -456,7 +532,7 @@ impl TimerApp {
             },
             Err(err) => {
                 log::warn!("Update download failed: {err}");
-                platform::confirm(
+                platform::alert(
                     "Update Error",
                     &format!("Could not download the update:\n{err}"),
                 );
@@ -525,6 +601,15 @@ impl eframe::App for TimerApp {
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let family = fonts::timer_family(ctx, &self.config.font_family);
+                let pointer_in = ctx.input(|i| i.pointer.hover_pos().is_some());
+                let alpha_scale = if self.config.hover_to_fade
+                    && pointer_in
+                    && !crate::menu::is_open()
+                {
+                    self.config.hover_fade_opacity
+                } else {
+                    1.0
+                };
                 let frame = render::Frame {
                     config: &self.config,
                     snapshot: &self.snapshot,
@@ -533,6 +618,7 @@ impl eframe::App for TimerApp {
                     font_size: self.font_size,
                     family,
                     fluid_phase: self.engine.fluid_phase,
+                    alpha_scale,
                 };
                 let mut painter = ui.painter().clone();
                 painter.set_opacity(self.config.opacity);
@@ -540,6 +626,40 @@ impl eframe::App for TimerApp {
 
                 self.overlay_interaction(ctx, ui, rect);
             });
+
+        // Magnetic edge snapping when dragging near a screen edge.
+        if self.config.edge_snapping && !self.config.window_locked {
+            if let Some(outer) = ctx.input(|i| i.viewport().outer_rect) {
+                let is_dragging = ctx.input(|i| i.pointer.any_down());
+                if !is_dragging {
+                    let (left, top, sw, sh) = platform::primary_work_area(ctx.pixels_per_point());
+                    let snap_dist = 18.0;
+                    let mut x = outer.min.x;
+                    let mut y = outer.min.y;
+                    let w = outer.width();
+                    let h = outer.height();
+                    if (x - left).abs() <= snap_dist {
+                        x = left;
+                    } else if ((x + w) - (left + sw)).abs() <= snap_dist {
+                        x = left + sw - w;
+                    }
+                    if (y - top).abs() <= snap_dist {
+                        y = top;
+                    } else if ((y + h) - (top + sh)).abs() <= snap_dist {
+                        y = top + sh - h;
+                    }
+                    if (x - outer.min.x).abs() > 0.5 || (y - outer.min.y).abs() > 0.5 {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                            x, y,
+                        )));
+                        self.config.pos_x = x.round() as i32;
+                        self.config.pos_y = y.round() as i32;
+                    }
+                }
+            }
+        }
+
+        self.context_menu(ctx);
 
         if self.settings.open {
             // Move the state out so the settings window can borrow the app
@@ -577,50 +697,106 @@ impl TimerApp {
         let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
 
         // A small grip in the bottom-right corner scales the text to the
-        // available width instead of just cropping it, matching the original.
-        // Allocated after the body rect so it wins the drag.
+        // Resize from any of the four corners when unlocked.
         if !self.config.window_locked {
-            let grip_size = 16.0;
-            let grip_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.right() - grip_size, rect.bottom() - grip_size),
-                rect.max,
-            );
-            let grip = ui.interact(
-                grip_rect,
-                ui.id().with("size-grip"),
-                egui::Sense::drag(),
-            );
-            if grip.hovered() {
-                ctx.set_cursor_icon(if self.config.rotation.is_vertical() {
-                    egui::CursorIcon::ResizeVertical
-                } else {
-                    egui::CursorIcon::ResizeHorizontal
-                });
-            }
-            if grip.drag_started() {
-                self.grip_start = Some(egui::vec2(
-                    self.config.width as f32,
-                    self.config.height as f32,
-                ));
-            }
-            if grip.dragged() {
-                if let Some(start) = self.grip_start {
-                    let delta = grip.drag_delta();
-                    let available = if self.config.rotation.is_vertical() {
-                        start.y + delta.y
+            let g = 16.0;
+            let corners = [
+                (
+                    "grip-tl",
+                    egui::Rect::from_min_size(rect.min, egui::vec2(g, g)),
+                    -1.0_f32,
+                    -1.0_f32,
+                    egui::CursorIcon::ResizeNwSe,
+                ),
+                (
+                    "grip-tr",
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.right() - g, rect.top()),
+                        egui::pos2(rect.right(), rect.top() + g),
+                    ),
+                    1.0_f32,
+                    -1.0_f32,
+                    egui::CursorIcon::ResizeNeSw,
+                ),
+                (
+                    "grip-bl",
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.left(), rect.bottom() - g),
+                        egui::pos2(rect.left() + g, rect.bottom()),
+                    ),
+                    -1.0_f32,
+                    1.0_f32,
+                    egui::CursorIcon::ResizeNeSw,
+                ),
+                (
+                    "grip-br",
+                    egui::Rect::from_min_max(
+                        egui::pos2(rect.right() - g, rect.bottom() - g),
+                        rect.max,
+                    ),
+                    1.0_f32,
+                    1.0_f32,
+                    egui::CursorIcon::ResizeNwSe,
+                ),
+            ];
+
+            for (id, grip_rect, sx, sy, cursor) in corners {
+                let grip = ui.interact(grip_rect, ui.id().with(id), egui::Sense::drag());
+                let is_br = id == "grip-br";
+                if is_br || grip.hovered() || grip.dragged() {
+                    let grip_alpha = if grip.hovered() || grip.dragged() {
+                        190
                     } else {
-                        start.x + delta.x
+                        70
                     };
-                    self.fit_to_width(available);
+                    let grip_stroke = egui::Stroke::new(
+                        1.25_f32,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, grip_alpha),
+                    );
+                    let painter = ui.painter();
+                    if is_br {
+                        for offset in [4.0_f32, 8.0, 12.0] {
+                            painter.line_segment(
+                                [
+                                    egui::pos2(rect.right() - offset, rect.bottom() - 2.0),
+                                    egui::pos2(rect.right() - 2.0, rect.bottom() - offset),
+                                ],
+                                grip_stroke,
+                            );
+                        }
+                    } else {
+                        painter.rect_stroke(grip_rect.shrink(3.0), 2.0, grip_stroke);
+                    }
                 }
-            }
-            if grip.drag_stopped() {
-                self.grip_start = None;
-                self.persist();
-            }
-            if grip.dragged() || grip.drag_started() {
-                // The grip owns this drag; don't also drag the window.
-                return;
+                if grip.hovered() || grip.dragged() {
+                    ctx.set_cursor_icon(cursor);
+                }
+                if grip.drag_started() {
+                    self.grip_start = Some(egui::vec2(
+                        self.config.width as f32,
+                        self.config.height as f32,
+                    ));
+                }
+                if grip.dragged() {
+                    if let Some(size) = self.grip_start.as_mut() {
+                        let d = grip.drag_delta();
+                        size.x += d.x * sx;
+                        size.y += d.y * sy;
+                        let available = if self.config.rotation.is_vertical() {
+                            size.y
+                        } else {
+                            size.x
+                        };
+                        self.fit_to_width(available);
+                    }
+                }
+                if grip.drag_stopped() {
+                    self.grip_start = None;
+                    self.persist();
+                }
+                if grip.dragged() || grip.drag_started() {
+                    return;
+                }
             }
         }
 
@@ -634,33 +810,50 @@ impl TimerApp {
             }
         }
 
-        response.context_menu(|ui| {
-            if ui.button("Start / Pause").clicked() {
-                self.toggle();
-                ui.close_menu();
+        // The menu is its own OS window rather than an egui `context_menu`,
+        // which would be clipped to the overlay's small viewport.
+        let clicked_at = response
+            .secondary_clicked()
+            .then(|| response.interact_pointer_pos())
+            .flatten();
+        if let Some(pos) = clicked_at {
+            // `interact_pointer_pos` is viewport-local; the window wants
+            // monitor coordinates.
+            let origin = ctx
+                .input(|i| i.viewport().outer_rect.map(|r| r.min))
+                .unwrap_or(egui::Pos2::ZERO);
+            crate::menu::open(origin + pos.to_vec2());
+        }
+    }
+
+    /// Draw the context menu (if open) and act on the user's choice.
+    fn context_menu(&mut self, ctx: &egui::Context) {
+        crate::menu::show(ctx, &self.config);
+
+        let Some(choice) = crate::menu::take_choice() else {
+            return;
+        };
+        let Some(action) = choice else {
+            return;
+        };
+        use crate::menu::MenuAction;
+        match action {
+            MenuAction::StartPause => self.toggle(),
+            MenuAction::Reset => self.reset(),
+            MenuAction::Lap => self.trigger_lap(),
+            MenuAction::AddMinute => self.adjust_time(60.0),
+            MenuAction::SubMinute => self.adjust_time(-60.0),
+            MenuAction::CopyTime => {
+                if !self.snapshot.text.is_empty() {
+                    ctx.copy_text(self.snapshot.text.clone());
+                }
             }
-            if ui.button("Reset").clicked() {
-                self.reset();
-                ui.close_menu();
-            }
-            if ui.button("Lap").clicked() {
-                self.trigger_lap();
-                ui.close_menu();
-            }
-            ui.separator();
-            let mut ghost = self.config.ghost_mode;
-            if ui.checkbox(&mut ghost, "Ghost Mode").changed() {
-                self.toggle_ghost();
-            }
-            if ui.button("Settings\u{2026}").clicked() {
-                self.settings.open = true;
-                ui.close_menu();
-            }
-            ui.separator();
-            if ui.button("Exit").clicked() {
-                self.request_quit(ctx);
-            }
-        });
+            MenuAction::MiniMode => self.toggle_mini_mode(),
+            MenuAction::GhostMode => self.toggle_ghost(),
+            MenuAction::LoadProfile(name) => self.apply_profile(&name),
+            MenuAction::Settings => self.settings.open = true,
+            MenuAction::Exit => self.request_quit(ctx),
+        }
     }
 }
 
@@ -706,12 +899,11 @@ pub fn run() -> eframe::Result<()> {
     )
 }
 
-/// Top-right of the primary screen, inset by a small margin.
+/// Top-right of the primary screen's work area, inset by a small margin.
 fn default_position(config: &Config) -> (f32, f32) {
+    let (left, top, screen_w, _) = platform::primary_work_area(1.0);
     let width = config.width as f32;
-    // 1920x1080 is the safe assumption without querying the monitor API here;
-    // the window clamps itself onto the screen regardless.
-    (1920.0 - width - 24.0, 24.0)
+    ((left + screen_w - width - 24.0).max(left), top + 24.0)
 }
 
 fn load_icon() -> egui::IconData {

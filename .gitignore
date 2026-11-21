@@ -28,3 +28,6 @@ venv/
 # OS cruft
 .DS_Store
 Thumbs.db
+
+# Local agent workspace data
+.opencode/

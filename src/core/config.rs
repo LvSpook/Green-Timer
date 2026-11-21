@@ -18,10 +18,19 @@ pub enum Mode {
     Down,
     Clock,
     Pomodoro,
+    Interval,
+    TargetTime,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 4] = [Mode::Up, Mode::Down, Mode::Clock, Mode::Pomodoro];
+    pub const ALL: [Mode; 6] = [
+        Mode::Up,
+        Mode::Down,
+        Mode::Clock,
+        Mode::Pomodoro,
+        Mode::Interval,
+        Mode::TargetTime,
+    ];
 }
 
 impl Default for Mode {
@@ -105,12 +114,100 @@ impl Rotation {
 pub enum Theme {
     Default,
     Chalkboard,
+    Cyberpunk,
+    MinimalGlass,
+    RetroLcd,
+    WarmPaper,
+    HighContrast,
+}
+
+impl Theme {
+    pub const ALL: [Theme; 7] = [
+        Theme::Default,
+        Theme::Chalkboard,
+        Theme::Cyberpunk,
+        Theme::MinimalGlass,
+        Theme::RetroLcd,
+        Theme::WarmPaper,
+        Theme::HighContrast,
+    ];
 }
 
 impl Default for Theme {
     fn default() -> Self {
         Theme::Default
     }
+}
+
+/// A user-created theme saved in Settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomTheme {
+    pub name: String,
+    pub background: Rgb,
+    pub text_color: Rgb,
+    pub warning_color: Rgb,
+    pub border_color: Rgb,
+    pub dark_mode: bool,
+}
+
+impl Default for CustomTheme {
+    fn default() -> Self {
+        CustomTheme {
+            name: String::new(),
+            background: Rgb(24, 28, 36),
+            text_color: Rgb(0, 230, 140),
+            warning_color: Rgb(255, 90, 90),
+            border_color: Rgb(90, 110, 140),
+            dark_mode: true,
+        }
+    }
+}
+
+/// Which items appear in the right-click context menu.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ContextMenuConfig {
+    pub start_pause: bool,
+    pub reset: bool,
+    pub lap: bool,
+    pub quick_adjust: bool,
+    pub copy_time: bool,
+    pub mini_mode: bool,
+    pub ghost_mode: bool,
+    pub profiles: bool,
+    pub settings: bool,
+    pub exit: bool,
+}
+
+impl Default for ContextMenuConfig {
+    fn default() -> Self {
+        ContextMenuConfig {
+            start_pause: true,
+            reset: true,
+            lap: true,
+            quick_adjust: true,
+            copy_time: true,
+            mini_mode: true,
+            ghost_mode: true,
+            profiles: true,
+            settings: true,
+            exit: true,
+        }
+    }
+}
+
+/// A named snapshot of settings that can be switched to in one click.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedProfile {
+    pub name: String,
+    pub settings: serde_json::Value,
+}
+
+/// Automatic profile switch when a specific window (HWND) gains focus.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppProfileRule {
+    pub target_hwnd: u64,
+    pub profile_name: String,
 }
 
 /// A colour stored as an `#RRGGBB` string, matching the Python file format.
@@ -229,6 +326,30 @@ pub struct Config {
     pub auto_check_updates: bool,
     pub reduce_motion: bool,
     pub start_minimized: bool,
+    pub hide_leading_zeros: bool,
+    pub interval_work: f64,
+    pub interval_rest: f64,
+    pub interval_rounds: u32,
+    pub target_time: String,
+    pub auto_start_on_launch: bool,
+    pub auto_reset_on_zero: bool,
+    pub warning_beeps: bool,
+    pub use_gradient: bool,
+    pub gradient_end_color: Rgb,
+    pub pulse_on_warning: bool,
+    pub custom_label: String,
+    pub mini_mode: bool,
+    pub use_text_shadow: bool,
+    pub hover_to_fade: bool,
+    pub hover_fade_opacity: f32,
+    pub edge_snapping: bool,
+    pub hk_visibility: Hotkey,
+    pub hk_mini_mode: Hotkey,
+    pub context_menu: ContextMenuConfig,
+    pub profiles: Vec<SavedProfile>,
+    pub app_profile_rules: Vec<AppProfileRule>,
+    pub custom_themes: Vec<CustomTheme>,
+    pub active_custom_theme: Option<String>,
 }
 
 impl Default for Config {
@@ -285,11 +406,40 @@ impl Default for Config {
             auto_check_updates: true,
             reduce_motion: false,
             start_minimized: false,
+            hide_leading_zeros: false,
+            interval_work: 40.0,
+            interval_rest: 20.0,
+            interval_rounds: 8,
+            target_time: "17:00".to_string(),
+            auto_start_on_launch: false,
+            auto_reset_on_zero: false,
+            warning_beeps: false,
+            use_gradient: false,
+            gradient_end_color: Rgb(0xFF, 0x50, 0x3C),
+            pulse_on_warning: false,
+            custom_label: String::new(),
+            mini_mode: false,
+            use_text_shadow: false,
+            hover_to_fade: false,
+            hover_fade_opacity: 0.2,
+            edge_snapping: true,
+            hk_visibility: Hotkey::new("f11", 87),
+            hk_mini_mode: Hotkey::new("f12", 88),
+            context_menu: ContextMenuConfig::default(),
+            profiles: Vec::new(),
+            app_profile_rules: Vec::new(),
+            custom_themes: Vec::new(),
+            active_custom_theme: None,
         }
     }
 }
 
 impl Config {
+    /// Returns the currently active custom theme, if one is selected and exists.
+    pub fn active_custom_theme_data(&self) -> Option<&CustomTheme> {
+        let name = self.active_custom_theme.as_deref()?;
+        self.custom_themes.iter().find(|t| t.name == name)
+    }
     /// The binding for `action`.
     pub fn hotkey(&self, action: crate::hotkeys::Action) -> &Hotkey {
         use crate::hotkeys::Action;
@@ -299,6 +449,8 @@ impl Config {
             Action::Settings => &self.hk_settings,
             Action::Lap => &self.hk_lap,
             Action::Ghost => &self.hk_ghost,
+            Action::ToggleVisibility => &self.hk_visibility,
+            Action::ToggleMiniMode => &self.hk_mini_mode,
         }
     }
 
@@ -311,7 +463,33 @@ impl Config {
             Action::Settings => &mut self.hk_settings,
             Action::Lap => &mut self.hk_lap,
             Action::Ghost => &mut self.hk_ghost,
+            Action::ToggleVisibility => &mut self.hk_visibility,
+            Action::ToggleMiniMode => &mut self.hk_mini_mode,
         }
+    }
+
+    /// Capture a JSON snapshot of this config (excluding nested profiles/rules)
+    /// suitable for storing as a named profile.
+    pub fn snapshot_for_profile(&self) -> serde_json::Value {
+        let mut clone = self.clone();
+        clone.profiles.clear();
+        clone.app_profile_rules.clear();
+        serde_json::to_value(clone).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Apply a saved profile onto this config while preserving the profile list
+    /// and per-app rules.
+    pub fn apply_profile(&mut self, name: &str) -> bool {
+        let Some(profile) = self.profiles.iter().find(|p| p.name == name) else {
+            return false;
+        };
+        let Ok(mut loaded) = serde_json::from_value::<Config>(profile.settings.clone()) else {
+            return false;
+        };
+        loaded.profiles = self.profiles.clone();
+        loaded.app_profile_rules = self.app_profile_rules.clone();
+        *self = loaded.validated();
+        true
     }
 
     /// Clamp every value into a sane range, replacing anything nonsensical.
@@ -324,6 +502,13 @@ impl Config {
         self.pomo_break = clamp_f(self.pomo_break, 0.1, 600.0, 5.0);
         self.pomo_long_break = clamp_f(self.pomo_long_break, 0.1, 600.0, 15.0);
         self.pomo_cycles = self.pomo_cycles.clamp(1, 100);
+        self.interval_work = clamp_f(self.interval_work, 1.0, 3600.0, 40.0);
+        self.interval_rest = clamp_f(self.interval_rest, 0.0, 3600.0, 20.0);
+        self.interval_rounds = self.interval_rounds.clamp(1, 200);
+        if self.target_time.trim().is_empty() {
+            self.target_time = "17:00".to_string();
+        }
+        self.hover_fade_opacity = self.hover_fade_opacity.clamp(0.05, 1.0);
         self.decimals = self.decimals.min(3);
         self.font_size = self.font_size.clamp(4, 500);
         self.opacity = self.opacity.clamp(0.1, 1.0);
@@ -419,6 +604,19 @@ pub fn load() -> Config {
         }
     }
     read_config(&path).unwrap_or_default()
+}
+
+/// Export settings to an arbitrary JSON file.
+pub fn export_to_path(config: &Config, path: &Path) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    fs::write(path, json).map_err(|e| e.to_string())
+}
+
+/// Import settings from an arbitrary JSON file.
+pub fn import_from_path(path: &Path) -> Result<Config, String> {
+    let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let parsed: Config = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    Ok(parsed.validated())
 }
 
 /// Atomically write settings.

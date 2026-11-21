@@ -8,7 +8,7 @@
 //! can never make the timer jump or run backwards.
 
 use crate::config::{Config, Mode};
-use crate::formatting::format_duration;
+use crate::formatting::format_duration_with_options;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +84,15 @@ impl Clock for RealClock {
     }
 }
 
+/// A single recorded lap entry for the lap history log.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LapEntry {
+    pub index: usize,
+    pub total_text: String,
+    pub split_text: String,
+    pub total_seconds: f64,
+}
+
 pub struct TimerEngine<C: Clock = RealClock> {
     clock: C,
     running: bool,
@@ -91,8 +100,13 @@ pub struct TimerEngine<C: Clock = RealClock> {
     accumulated: Duration,
     phase: Phase,
     cycle_count: u32,
+    interval_resting: bool,
+    interval_round: u32,
+    last_warn_sec: Option<i32>,
     lap_text: String,
     lap_until: Option<Instant>,
+    lap_history: Vec<LapEntry>,
+    last_lap_elapsed: f64,
     last_text: String,
     last_char_count: usize,
     last_time_value: Option<f64>,
@@ -111,8 +125,13 @@ impl<C: Clock> TimerEngine<C> {
             accumulated: Duration::ZERO,
             phase: Phase::Work,
             cycle_count: 0,
+            interval_resting: false,
+            interval_round: 1,
+            last_warn_sec: None,
             lap_text: String::new(),
             lap_until: None,
+            lap_history: Vec::new(),
+            last_lap_elapsed: 0.0,
             last_text: String::new(),
             last_char_count: 0,
             last_time_value: None,
@@ -120,6 +139,44 @@ impl<C: Clock> TimerEngine<C> {
             cue_fired: false,
             fluid_phase: 0.0,
         }
+    }
+
+    pub fn lap_history(&self) -> &[LapEntry] {
+        &self.lap_history
+    }
+
+    pub fn clear_laps(&mut self) {
+        self.lap_history.clear();
+        self.last_lap_elapsed = 0.0;
+    }
+
+    pub fn export_laps_csv(&self) -> String {
+        let mut out = String::from("Lap,Total,Split\n");
+        for entry in &self.lap_history {
+            out.push_str(&format!(
+                "{},{},{}\n",
+                entry.index, entry.total_text, entry.split_text
+            ));
+        }
+        out
+    }
+
+    /// Add or subtract seconds on the fly without stopping the timer.
+    pub fn adjust_time(&mut self, config: &Config, delta_seconds: f64) {
+        if matches!(config.mode, Mode::Clock | Mode::TargetTime) {
+            return;
+        }
+        let current = self.elapsed();
+        // In countdown-style modes, +delta means MORE time remaining (less elapsed).
+        let signed = match config.mode {
+            Mode::Up => delta_seconds,
+            Mode::Down | Mode::Pomodoro | Mode::Interval => -delta_seconds,
+            Mode::Clock | Mode::TargetTime => 0.0,
+        };
+        let next = (current + signed).max(0.0);
+        self.accumulated = Duration::from_secs_f64(next);
+        self.started_at = self.clock.now();
+        self.last_warn_sec = None;
     }
 
     pub fn running(&self) -> bool {
@@ -182,8 +239,12 @@ impl<C: Clock> TimerEngine<C> {
         self.started_at = self.clock.now();
         self.phase = Phase::Work;
         self.cycle_count = 0;
+        self.interval_resting = false;
+        self.interval_round = 1;
+        self.last_warn_sec = None;
         self.lap_text.clear();
         self.lap_until = None;
+        self.last_lap_elapsed = 0.0;
         self.last_time_value = None;
         self.last_char_count = 0;
         self.last_text.clear();
@@ -191,9 +252,9 @@ impl<C: Clock> TimerEngine<C> {
         self.fluid_phase = 0.0;
     }
 
-    /// Show a lap banner. Returns `true` when accepted.
+    /// Show a lap banner and record the lap in history. Returns `true` when accepted.
     pub fn trigger_lap(&mut self, config: &Config) -> bool {
-        if !self.running || config.mode == Mode::Clock {
+        if !self.running || matches!(config.mode, Mode::Clock | Mode::TargetTime) {
             return false;
         }
         let reference = if self.last_snapshot.text.is_empty() {
@@ -201,6 +262,17 @@ impl<C: Clock> TimerEngine<C> {
         } else {
             self.last_snapshot.text.clone()
         };
+        let elapsed = self.elapsed();
+        let split = (elapsed - self.last_lap_elapsed).max(0.0);
+        self.last_lap_elapsed = elapsed;
+        let split_text = self.format_value(config, split, false);
+        let index = self.lap_history.len() + 1;
+        self.lap_history.push(LapEntry {
+            index,
+            total_text: reference.clone(),
+            split_text,
+            total_seconds: elapsed,
+        });
         self.lap_text = format!("LAP: {reference}");
         self.lap_until = Some(self.clock.now() + Duration::from_secs_f64(LAP_SECONDS));
         true
@@ -210,10 +282,22 @@ impl<C: Clock> TimerEngine<C> {
         if overdue && value < 0.0 {
             format!(
                 "+{}",
-                format_duration(-value, config.decimals, config.always_show_hours, false)
+                format_duration_with_options(
+                    -value,
+                    config.decimals,
+                    config.always_show_hours,
+                    false,
+                    config.hide_leading_zeros,
+                )
             )
         } else {
-            format_duration(value, config.decimals, config.always_show_hours, false)
+            format_duration_with_options(
+                value,
+                config.decimals,
+                config.always_show_hours,
+                false,
+                config.hide_leading_zeros,
+            )
         }
     }
 
@@ -224,7 +308,11 @@ impl<C: Clock> TimerEngine<C> {
         if config.use_threshold {
             match config.mode {
                 Mode::Up if value >= config.threshold_time => return ColorRole::Threshold,
-                Mode::Down if value <= config.threshold_time => return ColorRole::Threshold,
+                Mode::Down | Mode::Interval | Mode::TargetTime
+                    if value <= config.threshold_time =>
+                {
+                    return ColorRole::Threshold
+                }
                 _ => {}
             }
         }
@@ -277,7 +365,16 @@ impl<C: Clock> TimerEngine<C> {
                 overdue = false;
             }
             Mode::Down => {
-                value = config.countdown_start - self.elapsed();
+                let mut remaining = config.countdown_start - self.elapsed();
+                if remaining <= 0.0 && config.auto_reset_on_zero {
+                    events.push(Event::Cue);
+                    self.accumulated = Duration::ZERO;
+                    self.started_at = now;
+                    self.cue_fired = false;
+                    self.last_warn_sec = None;
+                    remaining = config.countdown_start;
+                }
+                value = remaining;
                 overdue = value < 0.0;
                 if overdue {
                     // Edge-triggered: fire once when the countdown passes zero,
@@ -291,12 +388,81 @@ impl<C: Clock> TimerEngine<C> {
                 }
                 progress = (value.max(0.0) / config.countdown_start.max(1e-6)) as f32;
             }
+            Mode::Interval => {
+                let total_rounds = config.interval_rounds.max(1);
+                let phase_secs = if self.interval_resting {
+                    config.interval_rest
+                } else {
+                    config.interval_work
+                }
+                .max(1.0);
+                let mut remaining = phase_secs - self.elapsed();
+                if remaining <= 0.0 && self.running {
+                    events.push(Event::Cue);
+                    self.accumulated = Duration::ZERO;
+                    self.started_at = now;
+                    self.last_warn_sec = None;
+                    if !self.interval_resting && config.interval_rest > 0.0 {
+                        self.interval_resting = true;
+                        self.lap_text =
+                            format!("REST {}/{}", self.interval_round, total_rounds);
+                        self.lap_until = Some(now + Duration::from_secs_f64(LAP_SECONDS));
+                        remaining = config.interval_rest;
+                    } else if self.interval_round < total_rounds {
+                        self.interval_resting = false;
+                        self.interval_round += 1;
+                        self.lap_text =
+                            format!("WORK {}/{}", self.interval_round, total_rounds);
+                        self.lap_until = Some(now + Duration::from_secs_f64(LAP_SECONDS));
+                        remaining = config.interval_work;
+                    } else {
+                        // All rounds complete!
+                        self.running = false;
+                        self.lap_text = "INTERVAL DONE".to_string();
+                        self.lap_until = Some(now + Duration::from_secs_f64(LAP_SECONDS));
+                        remaining = 0.0;
+                    }
+                }
+                let denom = if self.interval_resting {
+                    config.interval_rest
+                } else {
+                    config.interval_work
+                }
+                .max(1e-6);
+                progress = (remaining.max(0.0) / denom) as f32;
+                value = remaining.max(0.0);
+                overdue = false;
+            }
+            Mode::TargetTime => {
+                let remaining = seconds_until_target(&config.target_time);
+                value = remaining;
+                overdue = false;
+                // Progress sweeps across the final hour (3600s).
+                progress = (remaining.clamp(0.0, 3600.0) / 3600.0) as f32;
+            }
             Mode::Up => {
                 value = self.elapsed();
                 progress = ((value % 60.0) / 60.0) as f32;
                 overdue = false;
             }
             Mode::Clock => unreachable!(),
+        }
+
+        // Optional countdown warning beeps at 10s, 3s, 2s, 1s.
+        if config.warning_beeps
+            && self.running
+            && matches!(
+                config.mode,
+                Mode::Down | Mode::Pomodoro | Mode::Interval | Mode::TargetTime
+            )
+            && value > 0.0
+            && value <= 10.0
+        {
+            let sec = value.ceil() as i32;
+            if matches!(sec, 10 | 3 | 2 | 1) && self.last_warn_sec != Some(sec) {
+                self.last_warn_sec = Some(sec);
+                events.push(Event::Cue);
+            }
         }
 
         self.last_time_value = Some(value);
@@ -350,10 +516,43 @@ impl<C: Clock> TimerEngine<C> {
         let value = match config.mode {
             Mode::Down => config.countdown_start,
             Mode::Pomodoro => self.phase_duration(config, self.phase),
+            Mode::Interval => config.interval_work,
+            Mode::TargetTime => seconds_until_target(&config.target_time),
             _ => 0.0,
         };
         self.format_value(config, value, false)
     }
+}
+
+/// Seconds remaining from the current local wall-clock time until `HH:MM[:SS]`.
+/// Wraps to tomorrow if the target time has already passed today.
+pub fn seconds_until_target(spec: &str) -> f64 {
+    let parts: Vec<&str> = spec.trim().split(':').collect();
+    if parts.len() < 2 || parts.len() > 3 {
+        return 0.0;
+    }
+    let Ok(h) = parts[0].trim().parse::<u32>() else {
+        return 0.0;
+    };
+    let Ok(m) = parts[1].trim().parse::<u32>() else {
+        return 0.0;
+    };
+    let s = if parts.len() == 3 {
+        parts[2].trim().parse::<u32>().unwrap_or(0)
+    } else {
+        0
+    };
+    if h >= 24 || m >= 60 || s >= 60 {
+        return 0.0;
+    }
+    let target = (h * 3600 + m * 60 + s) as i64;
+    let now = chrono_lite::LocalTime::now().seconds_since_midnight() as i64;
+    let diff = if target >= now {
+        target - now
+    } else {
+        86_400 - now + target
+    };
+    diff as f64
 }
 
 /// Format the wall clock using a C-style `strftime` subset.
@@ -417,6 +616,10 @@ mod chrono_lite {
                 day,
                 weekday: ((days + 4).rem_euclid(7)) as u32, // 1970-01-01 was a Thursday
             }
+        }
+
+        pub fn seconds_since_midnight(&self) -> u32 {
+            self.hour * 3600 + self.minute * 60 + self.second
         }
 
         pub fn format(&self, pattern: &str) -> String {

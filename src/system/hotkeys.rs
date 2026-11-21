@@ -18,6 +18,8 @@ pub enum Action {
     Settings,
     Lap,
     Ghost,
+    ToggleVisibility,
+    ToggleMiniMode,
 }
 
 impl Action {
@@ -29,6 +31,8 @@ impl Action {
             Action::Settings => "hk_settings",
             Action::Lap => "hk_lap",
             Action::Ghost => "hk_ghost",
+            Action::ToggleVisibility => "hk_visibility",
+            Action::ToggleMiniMode => "hk_mini_mode",
         }
     }
 
@@ -39,15 +43,19 @@ impl Action {
             Action::Settings => "Open Settings",
             Action::Lap => "Trigger Lap",
             Action::Ghost => "Toggle Ghost Mode",
+            Action::ToggleVisibility => "Show / Hide Timer",
+            Action::ToggleMiniMode => "Toggle Mini-Mode",
         }
     }
 
-    pub const ALL: [Action; 5] = [
+    pub const ALL: [Action; 7] = [
         Action::Toggle,
         Action::Reset,
         Action::Settings,
         Action::Lap,
         Action::Ghost,
+        Action::ToggleVisibility,
+        Action::ToggleMiniMode,
     ];
 }
 

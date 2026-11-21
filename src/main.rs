@@ -6,16 +6,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-mod config;
-mod engine;
-mod fonts;
-mod formatting;
-mod hotkeys;
-mod platform;
-mod render;
-mod settings;
-mod tray;
-mod updater;
+mod core;
+mod system;
+mod ui;
+
+pub use crate::core::{config, engine, formatting};
+pub use crate::system::{hotkeys, platform, tray, updater};
+pub use crate::ui::{fonts, menu, render, settings};
 
 pub const APP_NAME: &str = "Green Timer";
 pub const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));

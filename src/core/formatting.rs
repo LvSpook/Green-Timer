@@ -29,16 +29,38 @@ pub fn split_ticks(seconds: f64, decimals: u8) -> (u32, u32, u32, u32) {
 }
 
 /// Format a duration for display.
+#[cfg(test)]
 pub fn format_duration(seconds: f64, decimals: u8, show_hours: bool, show_sign: bool) -> String {
+    format_duration_with_options(seconds, decimals, show_hours, show_sign, false)
+}
+
+/// Format a duration for display, optionally omitting leading zeros.
+pub fn format_duration_with_options(
+    seconds: f64,
+    decimals: u8,
+    show_hours: bool,
+    show_sign: bool,
+    hide_leading_zeros: bool,
+) -> String {
     let decimals = decimals.min(MAX_DECIMALS);
     let (hours, minutes, secs, frac) = split_ticks(seconds, decimals);
 
-    let mut body = format!("{minutes:02}:{secs:02}");
+    let mut body = if hide_leading_zeros {
+        if hours > 0 || show_hours {
+            format!("{hours}:{minutes:02}:{secs:02}")
+        } else if minutes > 0 {
+            format!("{minutes}:{secs:02}")
+        } else {
+            format!("{secs}")
+        }
+    } else if hours > 0 || show_hours {
+        format!("{hours:02}:{minutes:02}:{secs:02}")
+    } else {
+        format!("{minutes:02}:{secs:02}")
+    };
+
     if decimals > 0 {
         body.push_str(&format!(".{frac:0width$}", width = decimals as usize));
-    }
-    if hours > 0 || show_hours {
-        body = format!("{hours:02}:{body}");
     }
 
     if seconds < 0.0 {

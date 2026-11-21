@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Stage files and build Inno Setup installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist\GreenTimer" | Out-Null
+          Copy-Item "target\release\GreenTimer.exe" "dist\GreenTimer\GreenTimer.exe" -Force
+          Copy-Item "green_timer.ico" "dist\GreenTimer\green_timer.ico" -Force
+          iscc installer.iss
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Green Timer ${{ github.ref_name }} (Work in Progress)"
+          prerelease: ${{ contains(github.ref_name, 'wip') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
+          body_path: CHANGELOG.md
+          files: |
+            Output/GreenTimer_Setup_*.exe
+            dist/GreenTimer/GreenTimer.exe

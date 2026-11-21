@@ -120,11 +120,45 @@ pub fn mix_color(start: Color32, end: Color32, t: f32) -> Color32 {
     )
 }
 
+/// Multiply a colour's alpha by `scale` (`0.0..=1.0`).
+fn scale_alpha(color: Color32, scale: f32) -> Color32 {
+    let a = (color.a() as f32 * scale.clamp(0.0, 1.0)).round() as u8;
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), a)
+}
+
 /// The colour the timer should currently use for the given role.
 pub fn target_color(config: &Config, role: ColorRole) -> Color32 {
-    match role {
-        ColorRole::Normal => to_color32(config.normal_color, 255),
-        ColorRole::Threshold | ColorRole::Overdue => to_color32(config.gray_color, 255),
+    if let Some(custom) = config.active_custom_theme_data() {
+        return match role {
+            ColorRole::Normal => to_color32(custom.text_color, 255),
+            ColorRole::Threshold | ColorRole::Overdue => to_color32(custom.warning_color, 255),
+        };
+    }
+    match config.theme {
+        Theme::Default | Theme::Chalkboard => match role {
+            ColorRole::Normal => to_color32(config.normal_color, 255),
+            ColorRole::Threshold | ColorRole::Overdue => to_color32(config.gray_color, 255),
+        },
+        Theme::Cyberpunk => match role {
+            ColorRole::Normal => Color32::from_rgb(0, 245, 255),
+            ColorRole::Threshold | ColorRole::Overdue => Color32::from_rgb(255, 42, 133),
+        },
+        Theme::MinimalGlass => match role {
+            ColorRole::Normal => Color32::from_rgb(245, 248, 255),
+            ColorRole::Threshold | ColorRole::Overdue => Color32::from_rgb(255, 170, 90),
+        },
+        Theme::RetroLcd => match role {
+            ColorRole::Normal => Color32::from_rgb(28, 42, 24),
+            ColorRole::Threshold | ColorRole::Overdue => Color32::from_rgb(120, 35, 25),
+        },
+        Theme::WarmPaper => match role {
+            ColorRole::Normal => Color32::from_rgb(48, 38, 30),
+            ColorRole::Threshold | ColorRole::Overdue => Color32::from_rgb(190, 68, 42),
+        },
+        Theme::HighContrast => match role {
+            ColorRole::Normal => Color32::from_rgb(255, 255, 0),
+            ColorRole::Threshold | ColorRole::Overdue => Color32::from_rgb(255, 60, 60),
+        },
     }
 }
 
@@ -137,34 +171,350 @@ pub fn background_alpha(config: &Config) -> u8 {
 }
 
 /// Paint the translucent background panel and its optional border.
-pub fn draw_background(painter: &egui::Painter, config: &Config, rect: Rect, color: Color32) {
+pub fn draw_background(
+    painter: &egui::Painter,
+    config: &Config,
+    rect: Rect,
+    color: Color32,
+    pulse: f32,
+    alpha_scale: f32,
+) {
     if !config.show_background {
         return;
     }
 
-    let is_chalk = config.theme == Theme::Chalkboard;
-    let background = if is_chalk {
-        to_color32(CHALK_BOARD, background_alpha(config))
+    let mut background = if let Some(custom) = config.active_custom_theme_data() {
+        to_color32(custom.background, 235)
     } else {
-        Color32::from_rgba_unmultiplied(0, 0, 0, background_alpha(config))
+        match config.theme {
+            Theme::Default => Color32::from_rgba_unmultiplied(0, 0, 0, background_alpha(config)),
+            Theme::Chalkboard => to_color32(CHALK_BOARD, 255),
+            Theme::Cyberpunk => Color32::from_rgba_unmultiplied(14, 10, 32, 215),
+            Theme::MinimalGlass => Color32::from_rgba_unmultiplied(28, 34, 44, 115),
+            Theme::RetroLcd => Color32::from_rgb(156, 178, 126),
+            Theme::WarmPaper => Color32::from_rgb(245, 238, 224),
+            Theme::HighContrast => Color32::from_rgb(0, 0, 0),
+        }
     };
+    if pulse > 0.0 {
+        background = mix_color(
+            background,
+            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), background.a()),
+            pulse * 0.25,
+        );
+    }
+    background = scale_alpha(background, alpha_scale);
 
     let thickness = config.border_thickness;
-    let paint_rect = if config.border_style == BorderStyle::None {
-        rect
-    } else {
-        rect.shrink(thickness / 2.0)
-    };
-
-    let stroke = match config.border_style {
+    let mut stroke = match config.border_style {
         BorderStyle::Thin => Stroke::new(thickness, to_color32(config.thin_border_color, 255)),
         BorderStyle::Neon => Stroke::new(thickness, color),
-        BorderStyle::None if is_chalk => Stroke::new(4.0_f32, Color32::from_rgb(100, 70, 40)),
-        BorderStyle::None => Stroke::NONE,
+        BorderStyle::None => {
+            if let Some(custom) = config.active_custom_theme_data() {
+                Stroke::new(2.0_f32, to_color32(custom.border_color, 255))
+            } else {
+                match config.theme {
+                    Theme::Chalkboard => Stroke::new(4.0_f32, Color32::from_rgb(100, 70, 40)),
+                    Theme::Cyberpunk => Stroke::new(2.0_f32, Color32::from_rgb(255, 0, 170)),
+                    Theme::MinimalGlass => {
+                        Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 70))
+                    }
+                    Theme::RetroLcd => Stroke::new(3.0_f32, Color32::from_rgb(56, 72, 46)),
+                    Theme::WarmPaper => Stroke::new(2.0_f32, Color32::from_rgb(198, 182, 158)),
+                    Theme::HighContrast => Stroke::new(2.5_f32, Color32::from_rgb(255, 255, 255)),
+                    Theme::Default => Stroke::NONE,
+                }
+            }
+        }
+    };
+    if pulse > 0.0 && stroke.width == 0.0 {
+        stroke = Stroke::new(2.5_f32, scale_alpha(color, pulse));
+    } else {
+        stroke.color = scale_alpha(stroke.color, alpha_scale);
+    }
+
+    // Always inset by half the actual stroke width so theme borders never clip
+    // at the window edges or distort the rounded corners.
+    let paint_rect = if stroke.width > 0.0 {
+        rect.shrink(stroke.width / 2.0 + 0.5)
+    } else {
+        rect
     };
 
-    let rounding = Rounding::same(corner_radius(config, paint_rect));
+    let max_radius = (paint_rect.width().min(paint_rect.height()) / 2.0).max(0.0);
+    let radius = corner_radius(config, paint_rect).min(max_radius);
+    let rounding = Rounding::same(radius);
     painter.rect(paint_rect, rounding, background, stroke);
+}
+
+/// Shared UI colour palette derived from the active [`Theme`], used by the
+/// Settings window and the right-click context menu.
+#[derive(Clone, Copy)]
+pub struct UiPalette {
+    pub dark_mode: bool,
+    pub window_bg: Color32,
+    pub panel_bg: Color32,
+    pub widget_bg: Color32,
+    pub hover_bg: Color32,
+    pub accent: Color32,
+    pub border: Color32,
+    pub text: Color32,
+    pub muted_text: Color32,
+}
+
+pub fn ui_palette(theme: Theme) -> UiPalette {
+    match theme {
+        Theme::Default => UiPalette {
+            dark_mode: true,
+            window_bg: Color32::from_rgb(27, 27, 27),
+            panel_bg: Color32::from_rgb(22, 22, 22),
+            widget_bg: Color32::from_rgb(42, 42, 42),
+            hover_bg: Color32::from_rgb(56, 62, 56),
+            accent: Color32::from_rgb(0, 210, 80),
+            border: Color32::from_rgb(66, 66, 66),
+            text: Color32::from_gray(232),
+            muted_text: Color32::from_gray(155),
+        },
+        Theme::Chalkboard => UiPalette {
+            dark_mode: true,
+            window_bg: Color32::from_rgb(38, 56, 42),
+            panel_bg: Color32::from_rgb(30, 46, 34),
+            widget_bg: Color32::from_rgb(52, 74, 56),
+            hover_bg: Color32::from_rgb(66, 92, 70),
+            accent: Color32::from_rgb(235, 225, 160),
+            border: Color32::from_rgb(108, 78, 48),
+            text: Color32::from_rgb(240, 240, 232),
+            muted_text: Color32::from_rgb(185, 195, 178),
+        },
+        Theme::Cyberpunk => UiPalette {
+            dark_mode: true,
+            window_bg: Color32::from_rgb(18, 12, 36),
+            panel_bg: Color32::from_rgb(13, 8, 28),
+            widget_bg: Color32::from_rgb(32, 22, 60),
+            hover_bg: Color32::from_rgb(54, 24, 82),
+            accent: Color32::from_rgb(0, 245, 255),
+            border: Color32::from_rgb(255, 0, 170),
+            text: Color32::from_rgb(235, 248, 255),
+            muted_text: Color32::from_rgb(165, 150, 200),
+        },
+        Theme::MinimalGlass => UiPalette {
+            dark_mode: true,
+            window_bg: Color32::from_rgb(28, 34, 44),
+            panel_bg: Color32::from_rgb(22, 27, 36),
+            widget_bg: Color32::from_rgb(42, 50, 64),
+            hover_bg: Color32::from_rgb(56, 68, 86),
+            accent: Color32::from_rgb(130, 195, 255),
+            border: Color32::from_rgb(76, 88, 108),
+            text: Color32::from_rgb(240, 245, 252),
+            muted_text: Color32::from_rgb(165, 178, 198),
+        },
+        Theme::RetroLcd => UiPalette {
+            dark_mode: false,
+            window_bg: Color32::from_rgb(164, 184, 134),
+            panel_bg: Color32::from_rgb(148, 168, 120),
+            widget_bg: Color32::from_rgb(134, 154, 108),
+            hover_bg: Color32::from_rgb(120, 140, 96),
+            accent: Color32::from_rgb(28, 42, 24),
+            border: Color32::from_rgb(56, 72, 46),
+            text: Color32::from_rgb(24, 36, 20),
+            muted_text: Color32::from_rgb(56, 72, 48),
+        },
+        Theme::WarmPaper => UiPalette {
+            dark_mode: false,
+            window_bg: Color32::from_rgb(245, 238, 224),
+            panel_bg: Color32::from_rgb(235, 226, 208),
+            widget_bg: Color32::from_rgb(225, 214, 194),
+            hover_bg: Color32::from_rgb(212, 198, 175),
+            accent: Color32::from_rgb(180, 78, 44),
+            border: Color32::from_rgb(186, 170, 146),
+            text: Color32::from_rgb(48, 38, 30),
+            muted_text: Color32::from_rgb(112, 98, 84),
+        },
+        Theme::HighContrast => UiPalette {
+            dark_mode: true,
+            window_bg: Color32::from_rgb(0, 0, 0),
+            panel_bg: Color32::from_rgb(0, 0, 0),
+            widget_bg: Color32::from_rgb(24, 24, 24),
+            hover_bg: Color32::from_rgb(48, 48, 0),
+            accent: Color32::from_rgb(255, 255, 0),
+            border: Color32::from_rgb(255, 255, 255),
+            text: Color32::from_rgb(255, 255, 255),
+            muted_text: Color32::from_rgb(220, 220, 140),
+        },
+    }
+}
+
+/// Apply the active [`Theme`] to an egui viewport (Settings window, etc.).
+pub fn apply_theme_visuals(ctx: &egui::Context, theme: Theme) {
+    apply_palette_visuals(ctx, ui_palette(theme));
+}
+
+/// Resolve the UI palette for `config`, respecting any active custom theme.
+pub fn ui_palette_for_config(config: &Config) -> UiPalette {
+    if let Some(custom) = config.active_custom_theme_data() {
+        let bg = to_color32(custom.background, 255);
+        let accent = to_color32(custom.text_color, 255);
+        let border = to_color32(custom.border_color, 255);
+        let shift = if custom.dark_mode { 14i16 } else { -14i16 };
+        let adjust = |c: Color32, d: i16| {
+            Color32::from_rgb(
+                (c.r() as i16 + d).clamp(0, 255) as u8,
+                (c.g() as i16 + d).clamp(0, 255) as u8,
+                (c.b() as i16 + d).clamp(0, 255) as u8,
+            )
+        };
+        let text = if custom.dark_mode {
+            Color32::from_gray(236)
+        } else {
+            Color32::from_gray(28)
+        };
+        let muted_text = if custom.dark_mode {
+            Color32::from_gray(165)
+        } else {
+            Color32::from_gray(95)
+        };
+        return UiPalette {
+            dark_mode: custom.dark_mode,
+            window_bg: bg,
+            panel_bg: adjust(bg, -shift / 2),
+            widget_bg: adjust(bg, shift),
+            hover_bg: adjust(bg, shift * 2),
+            accent,
+            border,
+            text,
+            muted_text,
+        };
+    }
+    ui_palette(config.theme)
+}
+
+pub fn apply_theme_visuals_for_config(ctx: &egui::Context, config: &Config) {
+    apply_palette_visuals(ctx, ui_palette_for_config(config));
+}
+
+fn apply_palette_visuals(ctx: &egui::Context, p: UiPalette) {
+    let mut visuals = if p.dark_mode {
+        egui::Visuals::dark()
+    } else {
+        egui::Visuals::light()
+    };
+    visuals.window_fill = p.window_bg;
+    visuals.panel_fill = p.panel_bg;
+    visuals.faint_bg_color = p.widget_bg;
+    visuals.extreme_bg_color = p.panel_bg;
+    visuals.override_text_color = Some(p.text);
+    visuals.selection.bg_fill = p.accent;
+    visuals.selection.stroke = Stroke::new(1.0_f32, p.window_bg);
+    visuals.widgets.noninteractive.bg_fill = p.panel_bg;
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, p.border);
+    visuals.widgets.inactive.bg_fill = p.widget_bg;
+    visuals.widgets.inactive.weak_bg_fill = p.widget_bg;
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, p.border);
+    visuals.widgets.hovered.bg_fill = p.hover_bg;
+    visuals.widgets.hovered.weak_bg_fill = p.hover_bg;
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, p.accent);
+    visuals.widgets.active.bg_fill = p.accent;
+    visuals.widgets.active.weak_bg_fill = p.accent;
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, p.text);
+    ctx.set_visuals(visuals);
+}
+
+/// Effective opaque background color of the overlay for contrast checking.
+pub fn effective_background_color(config: &Config) -> Color32 {
+    if let Some(custom) = config.active_custom_theme_data() {
+        return to_color32(custom.background, 255);
+    }
+    match config.theme {
+        Theme::Default => Color32::from_rgb(0, 0, 0),
+        Theme::Chalkboard => to_color32(CHALK_BOARD, 255),
+        Theme::Cyberpunk => Color32::from_rgb(14, 10, 32),
+        Theme::MinimalGlass => Color32::from_rgb(28, 34, 44),
+        Theme::RetroLcd => Color32::from_rgb(156, 178, 126),
+        Theme::WarmPaper => Color32::from_rgb(245, 238, 224),
+        Theme::HighContrast => Color32::from_rgb(0, 0, 0),
+    }
+}
+
+/// WCAG relative luminance contrast ratio (`1.0`..=`21.0`).
+pub fn contrast_ratio(a: Color32, b: Color32) -> f32 {
+    fn channel(c: u8) -> f32 {
+        let s = c as f32 / 255.0;
+        if s <= 0.03928 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    fn lum(c: Color32) -> f32 {
+        0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+    }
+    let l1 = lum(a);
+    let l2 = lum(b);
+    let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Generate a crisp 32x32 themed timer icon (RGBA bytes + width/height) shared
+/// by the Settings window taskbar icon and the system tray icon.
+pub fn themed_icon_rgba(p: UiPalette) -> (Vec<u8>, u32, u32) {
+    const SIZE: usize = 32;
+    let mut rgba = vec![0u8; SIZE * SIZE * 4];
+    let center = (SIZE as f32 - 1.0) / 2.0;
+    let outer_r = 14.5_f32;
+    let inner_r = 11.5_f32;
+
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let idx = (y * SIZE + x) * 4;
+
+            if dist <= outer_r {
+                let col = if dist >= inner_r { p.accent } else { p.window_bg };
+                let edge_alpha = ((outer_r - dist).clamp(0.0, 1.0) * 255.0).round() as u8;
+                rgba[idx] = col.r();
+                rgba[idx + 1] = col.g();
+                rgba[idx + 2] = col.b();
+                rgba[idx + 3] = edge_alpha;
+            }
+        }
+    }
+
+    let mut set_px = |x: i32, y: i32, col: Color32| {
+        if x >= 0 && y >= 0 && (x as usize) < SIZE && (y as usize) < SIZE {
+            let idx = (y as usize * SIZE + x as usize) * 4;
+            rgba[idx] = col.r();
+            rgba[idx + 1] = col.g();
+            rgba[idx + 2] = col.b();
+            rgba[idx + 3] = 255;
+        }
+    };
+    for y in 8..=16 {
+        set_px(15, y, p.accent);
+        set_px(16, y, p.accent);
+    }
+    for x in 15..=22 {
+        set_px(x, 15, p.accent);
+        set_px(x, 16, p.accent);
+    }
+    for dy in -1..=1 {
+        for dx in -1..=1 {
+            set_px(16 + dx, 16 + dy, p.text);
+        }
+    }
+
+    (rgba, SIZE as u32, SIZE as u32)
+}
+
+/// Build an `egui::IconData` for the Settings window taskbar icon.
+pub fn themed_window_icon(config: &Config) -> egui::IconData {
+    let (rgba, width, height) = themed_icon_rgba(ui_palette_for_config(config));
+    egui::IconData {
+        rgba,
+        width,
+        height,
+    }
 }
 
 /// Geometry transform for one frame.
@@ -251,11 +601,18 @@ pub fn draw_text(
         return;
     }
 
+    if config.use_text_shadow {
+        let shadow_alpha = (fill.a() as f32 * 0.55).round() as u8;
+        let shadow_color = Color32::from_rgba_unmultiplied(0, 0, 0, shadow_alpha);
+        let offset = orientation.vector(Vec2::new(2.5, 3.0));
+        paint_galley(painter, &galley, center + offset, shadow_color, orientation.angle);
+    }
+
     if config.text_outline {
         // A ring of offsets approximates a round join, matching Qt's round stroke.
         let radius = (config.text_outline_thickness / 2.0).max(0.5);
         let steps = if radius > 2.5 { 12 } else { 8 };
-        let outline_color = to_color32(config.text_outline_color, 255);
+        let outline_color = to_color32(config.text_outline_color, fill.a());
         for step in 0..steps {
             let theta = step as f32 / steps as f32 * std::f32::consts::TAU;
             let delta = orientation.vector(Vec2::new(theta.cos(), theta.sin()) * radius);
@@ -430,6 +787,11 @@ fn draw_arc(
         points.push(center + Vec2::new(angle.cos(), angle.sin()) * radius);
     }
     rotate_points(&mut points, orientation);
+    let cap_radius = thickness / 2.0;
+    if let (Some(&start), Some(&end)) = (points.first(), points.last()) {
+        painter.circle_filled(start, cap_radius, color);
+        painter.circle_filled(end, cap_radius, color);
+    }
     painter.add(egui::Shape::line(points, Stroke::new(thickness, color)));
 }
 
@@ -531,9 +893,44 @@ fn bottom_edge_y(rect: Rect, radius: f32, x: f32) -> f32 {
     centre_y + (radius * radius - dx * dx).max(0.0).sqrt()
 }
 
+/// Draw a textured quad rotated by `orientation`.
+fn draw_rotated_quad(
+    painter: &egui::Painter,
+    texture_id: egui::TextureId,
+    rect: Rect,
+    uv: Rect,
+    tint: Color32,
+    orientation: Orientation,
+) {
+    let mut mesh = egui::Mesh::with_texture(texture_id);
+    let corners = [
+        (rect.left_top(), uv.left_top()),
+        (rect.right_top(), uv.right_top()),
+        (rect.right_bottom(), uv.right_bottom()),
+        (rect.left_bottom(), uv.left_bottom()),
+    ];
+    for (pos, tex) in corners {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: orientation.point(pos),
+            uv: tex,
+            color: tint,
+        });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
 /// Draw the sprite style: greyscale image with the coloured image revealed
-/// bottom-up according to progress.
-fn draw_sprite(painter: &egui::Painter, rect: Rect, progress: f32, textures: &Textures) {
+/// bottom-up according to progress, rotated along with the overlay.
+fn draw_sprite(
+    painter: &egui::Painter,
+    rect: Rect,
+    progress: f32,
+    textures: &Textures,
+    alpha_scale: f32,
+    orientation: Orientation,
+) {
     let (Some(color), Some(gray)) = (&textures.color, &textures.gray) else {
         return;
     };
@@ -545,19 +942,22 @@ fn draw_sprite(painter: &egui::Painter, rect: Rect, progress: f32, textures: &Te
         width = height * textures.aspect.max(0.01);
     }
     let target = Rect::from_center_size(rect.center(), Vec2::new(width, height));
-    let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+    let full_uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+    let tint = scale_alpha(Color32::WHITE, alpha_scale);
 
-    painter.image(gray.id(), target, uv, Color32::WHITE);
+    draw_rotated_quad(painter, gray.id(), target, full_uv, tint, orientation);
 
-    let fill_height = target.height() * progress.clamp(0.0, 1.0);
-    if fill_height <= 0.0 {
+    let p = progress.clamp(0.0, 1.0);
+    if p <= 0.0 {
         return;
     }
-    let clip = Rect::from_min_max(
+    let fill_height = target.height() * p;
+    let fill_rect = Rect::from_min_max(
         Pos2::new(target.left(), target.bottom() - fill_height),
         target.max,
     );
-    painter.with_clip_rect(clip).image(color.id(), target, uv, Color32::WHITE);
+    let fill_uv = Rect::from_min_max(Pos2::new(0.0, 1.0 - p), Pos2::new(1.0, 1.0));
+    draw_rotated_quad(painter, color.id(), fill_rect, fill_uv, tint, orientation);
 }
 
 /// Everything needed to paint one frame.
@@ -569,12 +969,24 @@ pub struct Frame<'a> {
     pub font_size: f32,
     pub family: FontFamily,
     pub fluid_phase: f32,
+    pub alpha_scale: f32,
 }
 
 /// Paint the whole overlay into `rect` (the full window rectangle).
 pub fn draw(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, frame: &Frame<'_>) {
     let config = frame.config;
-    draw_background(painter, config, rect, frame.color);
+    let alpha_scale = frame.alpha_scale.clamp(0.05, 1.0);
+    let pulse = if config.pulse_on_warning
+        && !config.reduce_motion
+        && frame.snapshot.color_role != ColorRole::Normal
+    {
+        let t = ctx.input(|i| i.time) as f32;
+        (t * 4.5).sin() * 0.5 + 0.5
+    } else {
+        0.0
+    };
+    let active_color = scale_alpha(frame.color, alpha_scale);
+    draw_background(painter, config, rect, active_color, pulse, alpha_scale);
 
     // Qt rotates clockwise, so the angle is negated.
     let orientation = Orientation {
@@ -592,10 +1004,20 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, frame: &Fr
     };
     let local = Rect::from_center_size(rect.center(), local_size);
 
+    let has_label = !config.custom_label.trim().is_empty();
     let mut text_center = local.center();
     if frame.snapshot.lap_visible {
         text_center.y -= local.height() * 0.1;
+    } else if has_label {
+        text_center.y += local.height() * 0.1;
     }
+
+    let progress_color = if config.use_gradient {
+        let end = scale_alpha(to_color32(config.gradient_end_color, 255), alpha_scale);
+        mix_color(active_color, end, 1.0 - frame.snapshot.progress)
+    } else {
+        active_color
+    };
 
     match config.display_style {
         DisplayStyle::Arc => draw_arc(
@@ -603,7 +1025,7 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, frame: &Fr
             config,
             local,
             frame.snapshot.progress,
-            frame.color,
+            progress_color,
             orientation,
         ),
         DisplayStyle::Bar => draw_bar(
@@ -611,7 +1033,7 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, frame: &Fr
             config,
             local,
             frame.snapshot.progress,
-            frame.color,
+            progress_color,
             orientation,
         ),
         DisplayStyle::Fluid => draw_fluid(
@@ -619,7 +1041,7 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, frame: &Fr
             config,
             local,
             frame.snapshot.progress,
-            frame.color,
+            progress_color,
             frame.fluid_phase,
             orientation,
         ),
@@ -628,14 +1050,35 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, frame: &Fr
             local,
             frame.snapshot.progress,
             frame.textures,
+            alpha_scale,
+            orientation,
         ),
         DisplayStyle::Text => {}
     }
 
+    if has_label {
+        let label_size = (frame.font_size * 0.32).clamp(9.0, 22.0);
+        let label_center = Pos2::new(
+            local.center().x,
+            (text_center.y - frame.font_size * 0.65).max(local.top() + label_size * 0.6),
+        );
+        draw_text(
+            ctx,
+            painter,
+            config,
+            &frame.family,
+            config.custom_label.trim(),
+            label_center,
+            label_size,
+            scale_alpha(active_color, 0.85),
+            orientation,
+        );
+    }
+
     if config.show_text {
         let text_color = match config.display_style {
-            DisplayStyle::Bar => to_color32(config.bar_text_color, 255),
-            _ => frame.color,
+            DisplayStyle::Bar => scale_alpha(to_color32(config.bar_text_color, 255), alpha_scale),
+            _ => active_color,
         };
         draw_text(
             ctx,
@@ -653,9 +1096,9 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, frame: &Fr
     if frame.snapshot.lap_visible && !frame.snapshot.lap_text.is_empty() {
         let lap_size = (frame.font_size * 0.4).max(8.0);
         let lap_color = if config.theme == Theme::Chalkboard {
-            Color32::from_rgba_unmultiplied(255, 255, 100, 170)
+            scale_alpha(Color32::from_rgba_unmultiplied(255, 255, 100, 170), alpha_scale)
         } else {
-            Color32::from_rgb(255, 255, 0)
+            scale_alpha(Color32::from_rgb(255, 255, 0), alpha_scale)
         };
         let lap_center =
             text_center + Vec2::new(0.0, frame.font_size * 0.75 + local.height() * 0.05);

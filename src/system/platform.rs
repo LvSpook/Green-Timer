@@ -9,7 +9,7 @@ mod imp {
     use std::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
-    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Foundation::{HWND, RECT};
     use windows::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
     };
@@ -17,8 +17,9 @@ mod imp {
         PlaySoundW, SND_ALIAS, SND_ASYNC, SND_FILENAME, SND_NODEFAULT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE,
-        HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_TRANSPARENT,
+        GetForegroundWindow, GetWindowLongW, SetWindowLongW, SetWindowPos, SystemParametersInfoW,
+        GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WS_EX_TRANSPARENT,
     };
 
     fn hwnd(value: isize) -> HWND {
@@ -115,6 +116,45 @@ mod imp {
         result == IDYES
     }
 
+    /// Show an informational/error message box with an OK button.
+    pub fn alert(title: &str, text: &str) {
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let title = wide(title);
+        let text = wide(text);
+        unsafe {
+            let _ = MessageBoxW(
+                HWND::default(),
+                PCWSTR(text.as_ptr()),
+                PCWSTR(title.as_ptr()),
+                MB_OK | MB_ICONERROR,
+            );
+        }
+    }
+
+    /// Primary monitor's usable work area (excluding taskbar) in logical points.
+    pub fn primary_work_area(scale: f32) -> (f32, f32, f32, f32) {
+        let mut rect = RECT::default();
+        let ok = unsafe {
+            SystemParametersInfoW(
+                SPI_GETWORKAREA,
+                0,
+                Some((&mut rect as *mut RECT).cast::<c_void>()),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            )
+        };
+        let scale = scale.max(0.5);
+        if ok.is_ok() && rect.right > rect.left && rect.bottom > rect.top {
+            (
+                rect.left as f32 / scale,
+                rect.top as f32 / scale,
+                (rect.right - rect.left) as f32 / scale,
+                (rect.bottom - rect.top) as f32 / scale,
+            )
+        } else {
+            (0.0, 0.0, 1920.0, 1080.0)
+        }
+    }
+
     /// Play a WAV file asynchronously, or the OS alert when no file is usable.
     pub fn play_sound(path: &str) {
         if !path.is_empty() && std::path::Path::new(path).is_file() {
@@ -148,6 +188,9 @@ mod imp {
     pub fn foreground_window() -> u64 {
         0
     }
+    pub fn primary_work_area(_scale: f32) -> (f32, f32, f32, f32) {
+        (0.0, 0.0, 1920.0, 1080.0)
+    }
     pub fn play_sound(_path: &str) {}
 }
 
@@ -180,6 +223,20 @@ pub fn confirm(title: &str, text: &str) -> bool {
 #[cfg(not(windows))]
 pub fn confirm(_title: &str, _text: &str) -> bool {
     false
+}
+
+/// Show a native OK alert dialog.
+#[cfg(windows)]
+pub fn alert(title: &str, text: &str) {
+    imp::alert(title, text);
+}
+
+#[cfg(not(windows))]
+pub fn alert(_title: &str, _text: &str) {}
+
+/// Primary monitor's usable work area `(left, top, width, height)` in logical points.
+pub fn primary_work_area(scale: f32) -> (f32, f32, f32, f32) {
+    imp::primary_work_area(scale)
 }
 
 /// Handle of the window that currently has keyboard focus (0 if unknown).
