@@ -1,0 +1,12 @@
+# GitHub language statistics
+#
+# Green Timer is a Rust application. The following files are part of the
+# repository but are not application source, so they should not appear in the
+# language breakdown shown on the repository page.
+
+# Retired Python implementation, kept for reference during the Rust port.
+legacy-python/** linguist-detectable=false
+
+# Build tooling: PowerShell build script and the Inno Setup installer script.
+build.ps1 linguist-detectable=false
+installer.iss linguist-detectable=false
