@@ -10,3 +10,6 @@ legacy-python/** linguist-detectable=false
 # Build tooling: PowerShell build script and the Inno Setup installer script.
 build.ps1 linguist-detectable=false
 installer.iss linguist-detectable=false
+
+# The docs site and README artwork are not application source.
+docs/** linguist-detectable=false

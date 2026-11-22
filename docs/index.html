@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Green Timer — always-on-top timer overlay for Windows</title>
+<meta name="description" content="A lightweight, always-on-top timer overlay for Windows. Count up, count down, Pomodoro, Interval/HIIT and Target Time modes with themes, hotkeys and a system tray.">
+<meta property="og:title" content="Green Timer">
+<meta property="og:description" content="A lightweight, always-on-top timer overlay for Windows.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="banner.svg">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script>
+  // Apply the saved theme before first paint to avoid a flash.
+  (function () {
+    try {
+      var saved = localStorage.getItem("gt-theme");
+      if (saved === "light" || saved === "dark") {
+        document.documentElement.setAttribute("data-theme", saved);
+      }
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top">
+      <img src="logo.svg" alt="">
+      <span>Green <b>Timer</b></span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#download">Download</a>
+      <a href="#hotkeys">Hotkeys</a>
+      <a href="#themes">Themes</a>
+      <a href="#build">Build</a>
+      <a href="#ai">AI disclosure</a>
+    </div>
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle colour scheme" title="Toggle colour scheme">◐</button>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap hero-inner">
+    <div class="preview">
+      <img src="banner.svg" alt="Green Timer banner">
+    </div>
+
+    <h1>A tiny, always-on-top timer <em>overlay</em></h1>
+    <p class="lede">
+      Count up, count down, run a Pomodoro, or count to a specific time — over any
+      window, without stealing clicks. Frameless, transparent, and built in Rust.
+    </p>
+
+    <div class="pill-row">
+      <span class="pill">Rust 1.80+</span>
+      <span class="pill">Windows</span>
+      <span class="pill">MIT licensed</span>
+      <span class="pill warn">Work in progress</span>
+    </div>
+
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/LvSpook/Green-Timer/releases">⬇ Download</a>
+      <a class="btn btn-ghost" href="https://github.com/LvSpook/Green-Timer">View on GitHub</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <div class="notice">
+      <span class="ico">🚧</span>
+      <div>
+        <strong>Work in progress</strong>
+        <p>
+          Green Timer is actively in development. Builds are published as
+          pre-releases, and the UI, settings and file formats may still change
+          between versions. Expect rough edges.
+        </p>
+      </div>
+    </div>
+
+    <section id="features">
+      <div class="section-head">
+        <h2>Features</h2>
+        <p>Everything the overlay can do, without opening a manual.</p>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3><span class="ico">⏱️</span> Timer modes</h3>
+          <ul>
+            <li><strong>Count Up</strong> — plain stopwatch</li>
+            <li><strong>Countdown</strong> — with optional looping on zero</li>
+            <li><strong>Clock</strong> — wall clock with a custom format</li>
+            <li><strong>Pomodoro</strong> — work / break / long break cycles</li>
+            <li><strong>Interval (HIIT)</strong> — work, rest and rounds</li>
+            <li><strong>Target Time</strong> — count down to 17:00</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3><span class="ico">🎨</span> Display styles</h3>
+          <ul>
+            <li><strong>Text</strong> — plain numbers</li>
+            <li><strong>Arc</strong> — circular progress ring</li>
+            <li><strong>Bar</strong> — horizontal progress bar</li>
+            <li><strong>Fluid</strong> — wavy liquid fill</li>
+            <li><strong>Sprite</strong> — image revealed by progress</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3><span class="ico">✨</span> Look and feel</h3>
+          <ul>
+            <li>7 built-in themes plus a custom theme builder</li>
+            <li>Colours, fonts, opacity, padding, corner radius</li>
+            <li>Gradient fills, text shadows, warning pulses</li>
+            <li>Optional Windows blur / acrylic backdrop</li>
+            <li>Rotation that carries the background and assets with it</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3><span class="ico">⚙️</span> Behaviour</h3>
+          <ul>
+            <li>Global hotkeys, matched by physical scan code</li>
+            <li>System tray with quick actions</li>
+            <li>Customisable right-click menu</li>
+            <li>Saved profiles and per-app auto-switch</li>
+            <li>Auto-pause when a target app loses focus</li>
+            <li>Lap history with CSV export</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="download">
+      <div class="section-head">
+        <h2>Download</h2>
+        <p>Grab the latest build from GitHub Releases.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>File</th><th>What it is</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>GreenTimer_Setup_v&lt;version&gt;.exe</code></td>
+              <td>Windows installer — per-user, no admin required</td>
+            </tr>
+            <tr>
+              <td><code>GreenTimer.exe</code></td>
+              <td>Standalone portable executable</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="margin-top:16px">
+        <a class="btn btn-primary" href="https://github.com/LvSpook/Green-Timer/releases">Open releases ⤴</a>
+      </p>
+    </section>
+
+    <section id="hotkeys">
+      <div class="section-head">
+        <h2>Default hotkeys</h2>
+        <p>Rebind them under Settings → Hotkeys.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Action</th><th>Key</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Start / pause</td><td><kbd>F1</kbd></td></tr>
+            <tr><td>Reset</td><td><kbd>F2</kbd></td></tr>
+            <tr><td>Open settings</td><td><kbd>F3</kbd></td></tr>
+            <tr><td>Ghost mode (click-through)</td><td><kbd>F4</kbd></td></tr>
+            <tr><td>Lap</td><td><kbd>Space</kbd></td></tr>
+            <tr><td>Show / hide timer</td><td><kbd>F11</kbd></td></tr>
+            <tr><td>Toggle mini mode</td><td><kbd>F12</kbd></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="color:var(--muted);font-size:14.5px;margin-top:14px">
+        Right-click the overlay for a quick menu; double-click it to start or
+        pause. Drag any corner to scale the text to fit.
+      </p>
+    </section>
+
+    <section id="themes">
+      <div class="section-head">
+        <h2>Themes</h2>
+        <p>Seven built-in palettes, or build your own.</p>
+      </div>
+
+      <div class="swatches">
+        <div class="swatch">
+          <div class="chip" style="background:#000;color:#00d250">12:30</div>
+          <div class="label">Default</div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#2e4432;color:#ebe1a0">12:30</div>
+          <div class="label">Chalkboard</div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#0e0a20;color:#00f5ff">12:30</div>
+          <div class="label">Cyberpunk Neon</div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#1c222c;color:#f5f8ff">12:30</div>
+          <div class="label">Minimal Glass</div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#9cb27e;color:#1c2a18">12:30</div>
+          <div class="label">Retro LCD</div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#f5eee0;color:#30261e">12:30</div>
+          <div class="label">Warm Paper</div>
+        </div>
+        <div class="swatch">
+          <div class="chip" style="background:#000;color:#ffff00">12:30</div>
+          <div class="label">High Contrast</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="build">
+      <div class="section-head">
+        <h2>Build from source</h2>
+        <p>Requires a Rust toolchain (1.80 or newer).</p>
+      </div>
+
+      <div class="stack">
+        <div>
+          <p style="margin:0 0 8px;color:var(--muted);font-size:14.5px">Run the app</p>
+          <pre><code>cargo run --release</code></pre>
+        </div>
+
+        <div>
+          <p style="margin:0 0 8px;color:var(--muted);font-size:14.5px">
+            Build the installer (Inno Setup required for the setup EXE)
+          </p>
+          <pre><code>powershell -ExecutionPolicy Bypass -File build.ps1</code></pre>
+        </div>
+
+        <div>
+          <p style="margin:0 0 8px;color:var(--muted);font-size:14.5px">Run the tests</p>
+          <pre><code>cargo test</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="settings">
+      <div class="section-head">
+        <h2>Settings locations</h2>
+        <p>Saved per user, so the app works when installed under Program Files.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Item</th><th>Path</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Settings</td><td><code>%APPDATA%\GreenTimer\timer_pro_settings.json</code></td></tr>
+            <tr><td>Logs</td><td><code>%APPDATA%\GreenTimer\logs\green_timer.log</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="ai">
+      <div class="section-head">
+        <h2>AI assistance disclosure</h2>
+        <p>You deserve to know how the software you install was made.</p>
+      </div>
+
+      <div class="notice" style="border-color:var(--accent-line);background:var(--accent-soft)">
+        <span class="ico">🤖</span>
+        <div>
+          <strong style="color:var(--accent)">Parts of this project were written with the help of an AI coding assistant.</strong>
+          <p>
+            Design decisions, code, docs, tests and release automation have been
+            produced or reviewed with AI assistance, under human direction and
+            review. The project is <em>not</em> an official product of any AI
+            company and is not endorsed by or affiliated with any model provider.
+          </p>
+          <p>
+            AI-assisted code can contain mistakes a human would not have made.
+            The test suite and manual testing reduce that risk but cannot
+            eliminate it. Treat pre-release builds accordingly. If AI-assisted
+            code is a problem for your use case, please don't install it — no
+            hard feelings.
+          </p>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>Built with 🦀 Rust · Windows only · MIT licensed</span>
+    <nav>
+      <a href="https://github.com/LvSpook/Green-Timer">GitHub</a>
+      <a href="https://github.com/LvSpook/Green-Timer/releases">Releases</a>
+      <a href="https://github.com/LvSpook/Green-Timer/issues">Issues</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var btn = document.getElementById("theme-toggle");
+    var prefersLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+
+    function current() {
+      return root.getAttribute("data-theme") || (prefersLight ? "light" : "dark");
+    }
+
+    function apply(theme) {
+      root.setAttribute("data-theme", theme);
+      btn.textContent = theme === "light" ? "☀" : "☾";
+      // Swap the hero banner so it always contrasts with the page.
+      var heroImg = document.querySelector(".preview img");
+      if (heroImg) {
+        heroImg.src = theme === "light" ? "banner-light.svg" : "banner.svg";
+      }
+      try { localStorage.setItem("gt-theme", theme); } catch (e) {}
+    }
+
+    apply(current());
+
+    btn.addEventListener("click", function () {
+      apply(current() === "light" ? "dark" : "light");
+    });
+  })();
+</script>
+
+</body>
+</html>

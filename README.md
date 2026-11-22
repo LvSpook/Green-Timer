@@ -1,6 +1,10 @@
 <div align="center">
 
-<img src="docs/banner.svg" alt="Green Timer — a tiny, always-on-top timer overlay for Windows" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/banner-light.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/banner.svg">
+  <img src="docs/banner.svg" alt="Green Timer — a tiny, always-on-top timer overlay for Windows" width="100%">
+</picture>
 
 <br>
 
@@ -13,7 +17,7 @@
 **A lightweight, always-on-top timer overlay for Windows.**
 Count up, count down, run a Pomodoro, or count to a specific time — over any window, without stealing clicks.
 
-[Download](#-download) · [Features](#-features) · [Hotkeys](#-default-hotkeys) · [Build from source](#-running-from-source) · [AI disclosure](#-ai-assistance-disclosure)
+[Download](#-download) · [Features](#-features) · [Hotkeys](#-default-hotkeys) · [Docs site](https://lvspook.github.io/Green-Timer/) · [AI disclosure](#-ai-assistance-disclosure)
 
 </div>
 

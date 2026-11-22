@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="Green Timer">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="55%" stop-color="#f4fbf6"/>
+      <stop offset="100%" stop-color="#e9f7ee"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#00a83e"/>
+      <stop offset="100%" stop-color="#00c878"/>
+    </linearGradient>
+    <linearGradient id="ringFade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#00a83e" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#00c878" stop-opacity="0.06"/>
+    </linearGradient>
+    <linearGradient id="textFade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0b1a11"/>
+      <stop offset="100%" stop-color="#17452b"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.18" cy="0.5" r="0.6">
+      <stop offset="0%" stop-color="#00c878" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#00c878" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="320" fill="url(#bg)"/>
+  <rect width="1200" height="320" fill="url(#glow)"/>
+
+  <!-- faint grid -->
+  <g stroke="#00a83e" stroke-opacity="0.07" stroke-width="1">
+    <path d="M0 80h1200M0 160h1200M0 240h1200"/>
+    <path d="M200 0v320M400 0v320M600 0v320M800 0v320M1000 0v320"/>
+  </g>
+
+  <!-- timer dial -->
+  <g transform="translate(118 160)">
+    <circle r="96" fill="none" stroke="url(#ringFade)" stroke-width="12"/>
+    <circle r="96" fill="none" stroke="url(#ring)" stroke-width="12"
+            stroke-linecap="round" stroke-dasharray="452 603"
+            transform="rotate(-90)"/>
+    <circle r="96" fill="none" stroke="#00c878" stroke-opacity="0.30" stroke-width="22" filter="url(#soft)"
+            stroke-linecap="round" stroke-dasharray="452 603" transform="rotate(-90)"/>
+    <circle r="78" fill="#ffffff" stroke="#00a83e" stroke-opacity="0.22" stroke-width="2"/>
+    <text x="0" y="10" text-anchor="middle"
+          font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif"
+          font-size="46" font-weight="700" fill="url(#textFade)"
+          letter-spacing="1">12:30</text>
+    <text x="0" y="38" text-anchor="middle"
+          font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif"
+          font-size="13" fill="#008a33" fill-opacity="0.9"
+          letter-spacing="4">FOCUS</text>
+  </g>
+
+  <!-- wordmark -->
+  <g transform="translate(268 0)">
+    <text x="0" y="146"
+          font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif"
+          font-size="76" font-weight="800" fill="url(#textFade)"
+          letter-spacing="-1">Green<tspan fill="#00a83e"> </tspan>Timer</text>
+    <text x="4" y="192"
+          font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif"
+          font-size="20" fill="#55705f"
+          letter-spacing="0.5">A tiny, always-on-top timer overlay for Windows</text>
+    <g transform="translate(4 222)">
+      <g font-family="Segoe UI, Inter, Helvetica, Arial, sans-serif" font-size="13" font-weight="600">
+        <rect x="0" y="-16" width="92" height="28" rx="14" fill="#00a83e" fill-opacity="0.08" stroke="#00a83e" stroke-opacity="0.35"/>
+        <text x="46" y="3" text-anchor="middle" fill="#00752c">Rust</text>
+        <rect x="104" y="-16" width="112" height="28" rx="14" fill="#00a83e" fill-opacity="0.08" stroke="#00a83e" stroke-opacity="0.35"/>
+        <text x="160" y="3" text-anchor="middle" fill="#00752c">Windows</text>
+        <rect x="228" y="-16" width="132" height="28" rx="14" fill="#c97a00" fill-opacity="0.10" stroke="#c97a00" stroke-opacity="0.40"/>
+        <text x="294" y="3" text-anchor="middle" fill="#8f5500">Work in progress</text>
+      </g>
+    </g>
+  </g>
+
+  <rect x="1" y="1" width="1198" height="318" rx="18" fill="none" stroke="#00a83e" stroke-opacity="0.18" stroke-width="2"/>
+</svg>
