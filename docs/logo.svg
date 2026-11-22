@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="Green Timer logo">
+  <defs>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#00d250"/>
+      <stop offset="100%" stop-color="#00f5a0"/>
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="22" fill="#0b130e"/>
+  <circle cx="48" cy="48" r="31" fill="none" stroke="#00d250" stroke-opacity="0.18" stroke-width="7"/>
+  <circle cx="48" cy="48" r="31" fill="none" stroke="url(#ring)" stroke-width="7"
+          stroke-linecap="round" stroke-dasharray="136 195"
+          transform="rotate(-90 48 48)"/>
+  <circle cx="48" cy="48" r="5" fill="url(#ring)"/>
+  <circle cx="48" cy="24" r="2.6" fill="#7ff0ae"/>
+  <circle cx="72" cy="48" r="2.6" fill="#7ff0ae" fill-opacity="0.35"/>
+  <circle cx="48" cy="72" r="2.6" fill="#7ff0ae" fill-opacity="0.35"/>
+  <circle cx="24" cy="48" r="2.6" fill="#7ff0ae" fill-opacity="0.35"/>
+  <rect x="1" y="1" width="94" height="94" rx="21" fill="none" stroke="#00d250" stroke-opacity="0.25" stroke-width="2"/>
+</svg>

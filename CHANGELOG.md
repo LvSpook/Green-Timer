@@ -31,3 +31,8 @@
 - Fixed Settings window taskbar icon appearing as a black square.
 - Updated system tray icon & menu with live theming and new quick toggles.
 - Organized Rust source into `src/core/`, `src/ui/`, and `src/system/`.
+
+---
+
+**AI assistance disclosure:** parts of this project were written with the help of an AI coding assistant, under human direction and review. This project is not affiliated with or endorsed by any AI model provider. AI-assisted code can contain mistakes a human would not have made; see the [README](https://github.com/LvSpook/Green-Timer#-ai-assistance-disclosure) for details.
+
