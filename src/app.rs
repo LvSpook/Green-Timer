@@ -1011,13 +1011,16 @@ impl TimerApp {
         //
         // A click that just dismissed the note is ignored here, or the same
         // click would close the window and immediately reopen it.
-        if response.clicked()
-            && !response.double_clicked()
-            && !crate::note::is_open()
-            && !crate::note::just_dismissed()
-        {
-            self.note_click_at = Some(Instant::now());
-            ctx.request_repaint_after(std::time::Duration::from_millis(340));
+        if response.clicked() && !response.double_clicked() {
+            if crate::note::is_open() {
+                // The note only leaves on a click on the timer, so it goes at
+                // once rather than waiting out the double-click window.
+                self.note_click_at = None;
+                self.toggle_note(ctx, rect);
+            } else if !crate::note::just_dismissed() {
+                self.note_click_at = Some(Instant::now());
+                ctx.request_repaint_after(std::time::Duration::from_millis(340));
+            }
         }
         if let Some(at) = self.note_click_at {
             if at.elapsed() >= std::time::Duration::from_millis(320) {
@@ -1063,7 +1066,7 @@ impl TimerApp {
             .input(|i| i.viewport().outer_rect.map(|r| r.min))
             .unwrap_or(egui::Pos2::ZERO);
         let anchor = rect.translate(origin.to_vec2());
-        crate::note::open(anchor, &self.config.note);
+        crate::note::open(anchor, &self.config, ctx.pixels_per_point());
     }
 
     /// Persist the note text edited in the note window.
@@ -1095,6 +1098,15 @@ impl TimerApp {
         if !crate::note::is_open() && self.note_save_at.is_some() {
             self.note_save_at = None;
             self.persist();
+        }
+        // A resize is committed as soon as it happens, so the note reopens at
+        // the size it was left at.
+        if let Some((width, height)) = crate::note::take_size() {
+            if self.config.note_width != width || self.config.note_height != height {
+                self.config.note_width = width;
+                self.config.note_height = height;
+                self.persist();
+            }
         }
     }
 

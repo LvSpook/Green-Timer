@@ -24,10 +24,15 @@
 - **Quick adjust from Settings no longer resizes the Settings window.** Window geometry changes are now pinned to the timer, so the dialog and the overlay can no longer steal each other's size.
 
 ### Notes
-- **One note, saved between launches.** Left-click the timer to open a small square note window underneath it, type, and the text is kept automatically. A click elsewhere, Escape, or the × closes it without losing anything.
+- **One note, saved between launches.** Left-click the timer to open a note window underneath it, type, and the text is kept automatically.
+- **It closes when you click the timer again**, and not before. Clicking another window, the desktop, or anywhere else leaves the note where it is, so it can sit beside your work.
+- **A blank page, framed in your timer's colour.** There is no title bar, header, close button, counter or hint text: just the writing. The frame uses the timer's number colour, and the page behind the text uses the timer's own background.
+- **The text has its own colour,** with a picker on the Notes tab, or it can be left following the timer's numbers. The caret uses the text colour, and selected text is highlighted in a translucent version of the frame colour.
+- **It fills the block, wraps, and scrolls.** Long notes wrap at the window edge and scroll down inside the panel instead of overflowing.
+- **The edges can be dragged to resize it,** and it does not have to stay square. The size is remembered. Resizing can be switched off on the Notes tab, which also has width and height fields and a Reset button.
 - **Double-click still pauses the timer.** A single click waits out the double-click window first, so a double-click never pops the note open as well.
-- **The note follows your theme,** and global hotkeys are paused while you type so a bound letter types instead of firing its shortcut.
-- **A new Notes tab in Settings** holds the whole note text, with its own **Save Note** and **Clear Note** buttons. Saving or clearing there updates an open note window straight away, and Cancel does not undo a note you already saved.
+- **Global hotkeys are paused while you type** so a bound letter types instead of firing its shortcut.
+- **A Notes tab in Settings** holds the whole note text, with its own **Save Note** and **Clear Note** buttons. Saving or clearing there updates an open note window straight away, and Cancel does not undo a note you already saved.
 
 ### Under the Hood
 - Removed dead code, made the settings enums derive their defaults, and cleared every Clippy warning in the project.

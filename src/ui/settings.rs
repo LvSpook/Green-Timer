@@ -1468,6 +1468,64 @@ impl SettingsState {
             ui.add_space(4.0);
             ui.small(status);
         }
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Note Window").strong());
+        ui.small(
+            "The note is drawn on the timer's own background and framed in the timer's \
+             colour. These settings apply immediately.",
+        );
+        ui.add_space(6.0);
+
+        // A note colour left on "follow" tracks the timer's numbers, which is
+        // what most people want; unticking it pins one explicit colour.
+        let mut follows = self.draft.note_text_color.is_none();
+        if ui
+            .checkbox(&mut follows, "Text colour follows the timer's numbers")
+            .changed()
+        {
+            self.draft.note_text_color = if follows {
+                None
+            } else {
+                Some(self.draft.normal_color)
+            };
+        }
+        if let Some(colour) = self.draft.note_text_color.as_mut() {
+            colour_row(ui, "Note text", colour);
+        }
+
+        ui.add_space(4.0);
+        ui.checkbox(
+            &mut self.draft.note_resizable,
+            "Let the note's edges be dragged to resize it",
+        );
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let min = crate::config::NOTE_MIN_SIDE;
+            ui.label("Size");
+            ui.add(
+                egui::DragValue::new(&mut self.draft.note_width)
+                    .range(min..=2_000)
+                    .suffix(" px"),
+            );
+            ui.label("\u{00D7}");
+            ui.add(
+                egui::DragValue::new(&mut self.draft.note_height)
+                    .range(min..=2_000)
+                    .suffix(" px"),
+            );
+            if ui
+                .button("Reset")
+                .on_hover_text("Back to the default square note")
+                .clicked()
+            {
+                self.draft.note_width = 280;
+                self.draft.note_height = 280;
+            }
+        });
     }
 
     /// Persist the Notes tab's editor text, and let an open note window adopt it.
@@ -1787,6 +1845,20 @@ impl SettingsState {
         if !slider_touched {
             self.draft.font_size = live.font_size;
         }
+
+        // The note window reports the size it was dragged to straight away, so
+        // carry that in unless the size fields were just edited here.
+        let note_size_touched = self
+            .live
+            .as_ref()
+            .is_some_and(|previous| {
+                previous.note_width != self.draft.note_width
+                    || previous.note_height != self.draft.note_height
+            });
+        if !note_size_touched {
+            self.draft.note_width = live.note_width;
+            self.draft.note_height = live.note_height;
+        }
     }
 
     /// Push the current draft to the running overlay so changes are visible
@@ -1843,13 +1915,18 @@ impl SettingsState {
     fn cancel(&mut self, app: &mut TimerApp) {
         let original = self.original.clone();
         // The note is saved immediately by the Notes tab, so Cancel must not
-        // roll it back to the text from when the dialog opened.
+        // roll it back to the text from when the dialog opened. The same goes
+        // for the note window's size, which it commits as soon as it is dragged.
         let note = app.config.note.clone();
+        let note_width = app.config.note_width;
+        let note_height = app.config.note_height;
         let font_changed = app.config.font_family != original.font_family;
         let sprite_changed = app.config.sprite_path != original.sprite_path;
 
         app.config = original;
         app.config.note = note;
+        app.config.note_width = note_width;
+        app.config.note_height = note_height;
         app.font_size = app.config.font_size as f32;
         if font_changed {
             if let Some(ctx) = crate::app::current_context() {

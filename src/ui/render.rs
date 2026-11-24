@@ -170,6 +170,26 @@ pub fn background_alpha(config: &Config) -> u8 {
     }
 }
 
+/// The timer panel's own background colour at a given alpha.
+///
+/// Split out from [`draw_background`] so other surfaces that should look like
+/// the timer, such as the note's paper, can reuse exactly the same colour.
+pub fn panel_color(config: &Config, alpha: u8) -> Color32 {
+    let (rgb, theme_alpha) = match config.active_custom_theme_data() {
+        Some(custom) => (custom.background, 235),
+        None => match config.theme {
+            Theme::Default => (Rgb(0, 0, 0), alpha),
+            Theme::Chalkboard => (CHALK_BOARD, 255),
+            Theme::Cyberpunk => (Rgb(14, 10, 32), 215),
+            Theme::MinimalGlass => (Rgb(28, 34, 44), 115),
+            Theme::RetroLcd => (Rgb(156, 178, 126), 255),
+            Theme::WarmPaper => (Rgb(245, 238, 224), 255),
+            Theme::HighContrast => (Rgb(0, 0, 0), 255),
+        },
+    };
+    to_color32(rgb, theme_alpha)
+}
+
 /// Paint the translucent background panel and its optional border.
 pub fn draw_background(
     painter: &egui::Painter,
@@ -183,19 +203,7 @@ pub fn draw_background(
         return;
     }
 
-    let mut background = if let Some(custom) = config.active_custom_theme_data() {
-        to_color32(custom.background, 235)
-    } else {
-        match config.theme {
-            Theme::Default => Color32::from_rgba_unmultiplied(0, 0, 0, background_alpha(config)),
-            Theme::Chalkboard => to_color32(CHALK_BOARD, 255),
-            Theme::Cyberpunk => Color32::from_rgba_unmultiplied(14, 10, 32, 215),
-            Theme::MinimalGlass => Color32::from_rgba_unmultiplied(28, 34, 44, 115),
-            Theme::RetroLcd => Color32::from_rgb(156, 178, 126),
-            Theme::WarmPaper => Color32::from_rgb(245, 238, 224),
-            Theme::HighContrast => Color32::from_rgb(0, 0, 0),
-        }
-    };
+    let mut background = panel_color(config, background_alpha(config));
     if pulse > 0.0 {
         background = mix_color(
             background,

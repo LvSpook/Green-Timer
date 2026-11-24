@@ -13,6 +13,8 @@ pub const CONFIG_FILENAME: &str = "timer_pro_settings.json";
 
 /// Longest note the editor accepts, in characters.
 pub const NOTE_MAX_CHARS: usize = 2_000;
+/// Smallest side the note window can be dragged to, in points.
+pub const NOTE_MIN_SIDE: u32 = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -353,6 +355,15 @@ pub struct Config {
     pub hk_custom: Vec<CustomHotkey>,
     /// The single free-form note. Empty when no note is saved.
     pub note: String,
+    /// Note text colour. `None` follows the timer's numbers, so the two stay in
+    /// step until the user picks something else.
+    pub note_text_color: Option<Rgb>,
+    /// Note window size in points. The note is not forced square, so this is
+    /// kept as its own width and height.
+    pub note_width: u32,
+    pub note_height: u32,
+    /// Whether the note window's edges can be dragged to resize it.
+    pub note_resizable: bool,
     pub context_menu: ContextMenuConfig,
     pub profiles: Vec<SavedProfile>,
     pub app_profile_rules: Vec<AppProfileRule>,
@@ -437,6 +448,10 @@ impl Default for Config {
             hk_mini_mode: Hotkey::new("f12", 88),
             hk_custom: Vec::new(),
             note: String::new(),
+            note_text_color: None,
+            note_width: 280,
+            note_height: 280,
+            note_resizable: true,
             context_menu: ContextMenuConfig::default(),
             profiles: Vec::new(),
             app_profile_rules: Vec::new(),
@@ -540,6 +555,8 @@ impl Config {
         // A note is one short reminder, not a document; the cap also keeps a
         // corrupted file from bloating the settings.
         self.note = self.note.chars().take(NOTE_MAX_CHARS).collect();
+        self.note_width = self.note_width.clamp(NOTE_MIN_SIDE, 2_000);
+        self.note_height = self.note_height.clamp(NOTE_MIN_SIDE, 2_000);
         self
     }
 }
