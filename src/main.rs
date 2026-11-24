@@ -42,10 +42,15 @@ fn init_logging() {
     if let Some(dir) = log_dir() {
         if std::fs::create_dir_all(&dir).is_ok() {
             let path = dir.join("green_timer.log");
-            // Keep the log from growing without bound across launches.
+            // Keep the log from growing without bound across launches. The
+            // previous log is kept as `.old`, and that copy is capped too, so a
+            // machine that never restarts long enough to rotate still cannot
+            // accumulate logs forever.
             if let Ok(meta) = std::fs::metadata(&path) {
                 if meta.len() > 1_000_000 {
-                    let _ = std::fs::rename(&path, dir.join("green_timer.log.old"));
+                    let old = dir.join("green_timer.log.old");
+                    let _ = std::fs::remove_file(&old);
+                    let _ = std::fs::rename(&path, &old);
                 }
             }
             if let Ok(file) = std::fs::OpenOptions::new()
@@ -86,7 +91,7 @@ impl std::io::Write for SharedFile {
         }
         self.0
             .lock()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "log lock poisoned"))?
+            .map_err(|_| std::io::Error::other("log lock poisoned"))?
             .write(buf)
     }
 
@@ -96,7 +101,7 @@ impl std::io::Write for SharedFile {
         }
         self.0
             .lock()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "log lock poisoned"))?
+            .map_err(|_| std::io::Error::other("log lock poisoned"))?
             .flush()
     }
 }

@@ -11,9 +11,10 @@ use std::path::{Path, PathBuf};
 
 pub const CONFIG_FILENAME: &str = "timer_pro_settings.json";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
+    #[default]
     Up,
     Down,
     Clock,
@@ -33,14 +34,9 @@ impl Mode {
     ];
 }
 
-impl Default for Mode {
-    fn default() -> Self {
-        Mode::Up
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum DisplayStyle {
+    #[default]
     Text,
     Arc,
     Bar,
@@ -48,52 +44,31 @@ pub enum DisplayStyle {
     Sprite,
 }
 
-impl Default for DisplayStyle {
-    fn default() -> Self {
-        DisplayStyle::Text
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum WindowShape {
+    #[default]
     Rectangular,
     Rounded,
     Capsule,
 }
 
-impl Default for WindowShape {
-    fn default() -> Self {
-        WindowShape::Rectangular
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BorderStyle {
+    #[default]
     None,
     Thin,
     Neon,
 }
 
-impl Default for BorderStyle {
-    fn default() -> Self {
-        BorderStyle::None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Rotation {
     #[serde(rename = "0°")]
+    #[default]
     None,
     #[serde(rename = "90°")]
     Cw90,
     #[serde(rename = "270°")]
     Cw270,
-}
-
-impl Default for Rotation {
-    fn default() -> Self {
-        Rotation::None
-    }
 }
 
 impl Rotation {
@@ -110,8 +85,9 @@ impl Rotation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Theme {
+    #[default]
     Default,
     Chalkboard,
     Cyberpunk,
@@ -131,12 +107,6 @@ impl Theme {
         Theme::WarmPaper,
         Theme::HighContrast,
     ];
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        Theme::Default
-    }
 }
 
 /// A user-created theme saved in Settings.
@@ -211,7 +181,7 @@ pub struct AppProfileRule {
 }
 
 /// A colour stored as an `#RRGGBB` string, matching the Python file format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {
@@ -232,12 +202,6 @@ impl Rgb {
 
     pub fn to_hex(self) -> String {
         format!("#{:02X}{:02X}{:02X}", self.0, self.1, self.2)
-    }
-}
-
-impl Default for Rgb {
-    fn default() -> Self {
-        Rgb(0, 0, 0)
     }
 }
 
@@ -627,6 +591,13 @@ fn read_config(path: &Path) -> Option<Config> {
     }
 }
 
+/// Whether this is a brand-new install: no settings and no legacy file.
+///
+/// Checked before [`load`], which writes a settings file out on first launch.
+pub fn is_first_run() -> bool {
+    !config_path().exists() && !legacy_config_path().exists()
+}
+
 /// Load settings, migrating the legacy file on first run.
 pub fn load() -> Config {
     let path = config_path();
@@ -745,11 +716,13 @@ mod tests {
 
     #[test]
     fn validation_clamps_bad_values() {
-        let mut cfg = Config::default();
-        cfg.opacity = 5.0;
-        cfg.decimals = 99;
-        cfg.padding = 100_000;
-        cfg.countdown_start = f64::NAN;
+        let cfg = Config {
+            opacity: 5.0,
+            decimals: 99,
+            padding: 100_000,
+            countdown_start: f64::NAN,
+            ..Config::default()
+        };
         let cfg = cfg.validated();
         assert_eq!(cfg.opacity, 1.0);
         assert_eq!(cfg.decimals, 3);
@@ -763,11 +736,13 @@ mod tests {
         let cfg: Config = serde_json::from_str("{}").unwrap();
         assert!(cfg.hk_custom.is_empty());
 
-        let mut cfg = Config::default();
-        cfg.hk_custom.push(CustomHotkey {
-            action: "lap".to_string(),
-            key: Hotkey::new("f9", 67),
-        });
+        let cfg = Config {
+            hk_custom: vec![CustomHotkey {
+                action: "lap".to_string(),
+                key: Hotkey::new("f9", 67),
+            }],
+            ..Config::default()
+        };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(back.hk_custom, cfg.hk_custom);

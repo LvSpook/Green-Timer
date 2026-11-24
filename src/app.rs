@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 const TICK: Duration = Duration::from_millis(16);
 const IDLE_TICK: Duration = Duration::from_millis(100);
 const COLOR_FADE: f32 = 0.35;
+/// Radians per second the fluid surface travels. Chosen to match the old
+/// fixed 0.25-radians-per-frame step on a 60 Hz display.
+const FLUID_SPEED: f32 = 15.0;
 
 pub struct TimerApp {
     pub config: Config,
@@ -46,6 +49,11 @@ pub struct TimerApp {
     last_auto_profile: Option<String>,
     /// Saved font size before entering compact mini-mode.
     pre_mini_font_size: Option<u32>,
+    /// Time of the previous frame, for frame-rate independent animation.
+    last_frame: Instant,
+    /// When the last show/hide request was sent, so the OS-visibility poll does
+    /// not read the old state before egui applies the change.
+    visibility_requested: Option<Instant>,
 }
 
 #[derive(Default, Clone, PartialEq)]
@@ -53,12 +61,13 @@ struct AppliedState {
     hwnd: isize,
     blur: bool,
     ghost: bool,
-    opacity: u32,
     vertical: bool,
 }
 
 impl TimerApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Capture this before `load`, which may write a settings file out.
+        let first_run = config::is_first_run();
         let config = config::load();
         fonts::install(&cc.egui_ctx, &config.font_family);
 
@@ -66,7 +75,7 @@ impl TimerApp {
         hotkeys.rebind(&config);
 
         let tray = Tray::new(&config);
-        if tray.is_available() == false {
+        if !tray.is_available() {
             log::info!("Running without a tray icon");
         }
 
@@ -84,13 +93,27 @@ impl TimerApp {
             None
         };
 
+        // On a brand-new install there is nothing to discover the app with, so
+        // open Settings once. Every launch after that stays out of the way.
+        let mut settings = SettingsState::default();
+        if first_run {
+            log::info!("First run: opening the settings window");
+            settings.open(&config);
+            // Write the defaults out now. Otherwise closing the dialog with
+            // Cancel leaves no settings file and the next launch looks like a
+            // first run all over again.
+            if let Err(err) = config::save(&config) {
+                log::warn!("Could not create the settings file: {err}");
+            }
+        }
+
         TimerApp {
             show_window: !config.start_minimized || !tray.is_available(),
             font_size: config.font_size as f32,
             config,
             engine,
             snapshot,
-            settings: SettingsState::default(),
+            settings,
             textures,
             hotkeys,
             tray,
@@ -106,6 +129,8 @@ impl TimerApp {
             grip_start: None,
             last_auto_profile: None,
             pre_mini_font_size: None,
+            last_frame: Instant::now(),
+            visibility_requested: None,
         }
     }
 
@@ -219,13 +244,11 @@ impl TimerApp {
             && self.config.window_blur
             && self.config.show_background
             && self.config.theme != crate::config::Theme::Chalkboard;
-        let opacity = (self.config.opacity * 100.0).round() as u32;
 
         let desired = AppliedState {
             hwnd: self.hwnd,
             blur,
             ghost: self.config.ghost_mode,
-            opacity,
             vertical: self.config.rotation.is_vertical(),
         };
         if desired == self.applied {
@@ -397,8 +420,8 @@ impl TimerApp {
                 Action::Lap => self.trigger_lap(),
                 Action::Ghost => self.toggle_ghost(),
                 Action::ToggleVisibility => {
-                    self.show_window = !self.show_window;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.show_window));
+                    let next = !self.show_window;
+                    self.set_window_visible(ctx, next);
                 }
                 Action::ToggleMiniMode => self.toggle_mini_mode(),
             }
@@ -412,22 +435,23 @@ impl TimerApp {
                 TrayCommand::ToggleGhost => self.toggle_ghost(),
                 TrayCommand::Settings => self.settings.open = true,
                 TrayCommand::ToggleVisibility => {
-                    self.show_window = !self.show_window;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.show_window));
+                    let next = !self.show_window;
+                    self.set_window_visible(ctx, next);
                 }
                 TrayCommand::Exit => self.request_quit(ctx),
             }
         }
 
-        if self.update_available.is_some() {
-            // Handled by the settings window / banner.
-        }
-
-        // Escape quits and Space toggles, matching the original. While the
+        // Escape hides the overlay; it does not quit, so a stray keypress can
+        // never end a running timer. Quit stays on the tray menu and the
+        // settings dialog. Space toggles, matching the original. While the
         // menu is open it owns the keyboard, so presses must not leak through.
         if self.show_window && !self.config.ghost_mode && !crate::menu::is_open() {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.request_quit(ctx);
+                // Hiding is only safe with a tray icon to bring it back.
+                if self.tray.is_available() {
+                    self.set_window_visible(ctx, false);
+                }
             } else if self.config.mode != Mode::Clock
                 && ctx.input(|i| i.key_pressed(egui::Key::Space))
             {
@@ -440,6 +464,14 @@ impl TimerApp {
         self.persist();
         self.quit = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// Show or hide the overlay, remembering when it was asked for so the
+    /// OS-visibility poll does not fight the change.
+    fn set_window_visible(&mut self, ctx: &egui::Context, visible: bool) {
+        self.show_window = visible;
+        self.visibility_requested = Some(Instant::now());
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(visible));
     }
 
     /// Recompute the snapshot without changing the running state, so edits are
@@ -589,6 +621,22 @@ impl eframe::App for TimerApp {
         }
         CURRENT_CTX.with(|cell| *cell.borrow_mut() = Some(ctx.clone()));
 
+        // Something outside egui can show the window again (a second launch
+        // calls `ShowWindow`). Adopt the real state so keys and clicks work.
+        // Skip the frame or two right after we ask for a change ourselves,
+        // while the OS still reports the previous state.
+        let settled = match self.visibility_requested {
+            Some(at) => at.elapsed() > Duration::from_millis(400),
+            None => true,
+        };
+        if settled && self.hwnd != 0 && platform::is_window_visible(self.hwnd) {
+            self.visibility_requested = None;
+            if !self.show_window {
+                log::debug!("Window was shown externally; syncing visible state");
+                self.show_window = true;
+            }
+        }
+
         self.poll_updates();
         self.poll_install();
         if let Some(info) = take_pending_install() {
@@ -598,9 +646,6 @@ impl eframe::App for TimerApp {
         self.tick();
         self.display_color = self.current_color();
         self.sync_platform();
-
-        let style = ctx.style();
-        let _ = style;
 
         egui::CentralPanel::default()
             .frame(egui::Frame::none())
@@ -685,7 +730,22 @@ impl eframe::App for TimerApp {
         if self.config.display_style == crate::config::DisplayStyle::Fluid
             && self.config.mode != Mode::Clock
         {
-            self.engine.fluid_phase += 0.25;
+            // Advance by wall-clock time rather than a fixed step per frame, so
+            // the wave moves at a steady speed whatever the refresh rate is (a
+            // 144 Hz monitor used to run the wave six times faster than 24 Hz).
+            let now = Instant::now();
+            let delta = now
+                .saturating_duration_since(self.last_frame)
+                .as_secs_f32()
+                .min(0.25);
+            self.last_frame = now;
+            if self.config.reduce_motion {
+                // Respect the accessibility setting: keep the surface still.
+                self.engine.fluid_phase = 0.0;
+            } else {
+                self.engine.fluid_phase =
+                    (self.engine.fluid_phase + delta * FLUID_SPEED).rem_euclid(std::f32::consts::TAU);
+            }
         }
     }
 
@@ -810,10 +870,8 @@ impl TimerApp {
             self.toggle();
         }
 
-        if !self.config.window_locked {
-            if response.drag_started() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
+        if !self.config.window_locked && response.drag_started() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
 
         // The menu is its own OS window rather than an egui `context_menu`,
@@ -874,12 +932,20 @@ fn window_handle(frame: &eframe::Frame) -> Option<isize> {
 }
 
 pub fn run() -> eframe::Result<()> {
+    // A second launch (double-clicking the exe again) should reveal the copy
+    // that is already running instead of stacking a duplicate overlay and tray
+    // icon on top of it.
+    if !platform::claim_single_instance() {
+        if platform::focus_existing_window(APP_NAME) {
+            log::info!("Another instance is already running; focusing it");
+        } else {
+            log::info!("Another instance is already running; exiting");
+        }
+        return Ok(());
+    }
+
     let config = config::load();
-    let (x, y) = if config.pos_x >= 0 && config.pos_y >= 0 {
-        (config.pos_x as f32, config.pos_y as f32)
-    } else {
-        default_position(&config)
-    };
+    let (x, y) = initial_position(&config);
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -914,6 +980,42 @@ fn default_position(config: &Config) -> (f32, f32) {
     ((left + screen_w - width - 24.0).max(left), top + 24.0)
 }
 
+/// Whether a window at `(x, y)` with this size overlaps `area` enough to be
+/// usable. Split out so the off-screen recovery rule can be tested.
+fn is_on_screen(
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    area: (f32, f32, f32, f32),
+) -> bool {
+    let (left, top, screen_w, screen_h) = area;
+    // Keep a comfortable band of the window on screen, not just one pixel.
+    const MARGIN: f32 = 48.0;
+    let visible_x = x + width > left + MARGIN && x < left + screen_w - MARGIN;
+    let visible_y = y + height > top + MARGIN && y < top + screen_h - MARGIN;
+    visible_x && visible_y
+}
+
+/// Where to put the overlay on launch.
+///
+/// A saved position is reused, but only when enough of the window would still
+/// be visible: unplugging a second monitor (or changing resolution) otherwise
+/// leaves the overlay stranded off-screen where it can never be dragged back.
+fn initial_position(config: &Config) -> (f32, f32) {
+    if config.pos_x < 0 || config.pos_y < 0 {
+        return default_position(config);
+    }
+    let (x, y) = (config.pos_x as f32, config.pos_y as f32);
+    let area = platform::primary_work_area(1.0);
+    if is_on_screen(x, y, config.width as f32, config.height as f32, area) {
+        (x, y)
+    } else {
+        log::info!("Saved window position is off-screen; moving it back into view");
+        default_position(config)
+    }
+}
+
 fn load_icon(config: &Config) -> egui::IconData {
     // The standalone release download is often just the .exe with no .ico next
     // to it, so never rely on that file existing: draw the themed icon first,
@@ -935,4 +1037,39 @@ fn load_icon(config: &Config) -> egui::IconData {
     }
 
     crate::render::themed_window_icon(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_on_screen;
+
+    const SCREEN: (f32, f32, f32, f32) = (0.0, 0.0, 1920.0, 1080.0);
+
+    #[test]
+    fn window_inside_the_screen_is_kept() {
+        assert!(is_on_screen(100.0, 100.0, 300.0, 120.0, SCREEN));
+        assert!(is_on_screen(1600.0, 900.0, 300.0, 120.0, SCREEN));
+    }
+
+    #[test]
+    fn window_on_a_removed_monitor_is_rejected() {
+        // Saved when a second screen sat to the right of the primary.
+        assert!(!is_on_screen(2400.0, 200.0, 300.0, 120.0, SCREEN));
+        // Saved above the screen after the layout changed.
+        assert!(!is_on_screen(200.0, -400.0, 300.0, 120.0, SCREEN));
+    }
+
+    #[test]
+    fn tiny_sliver_at_the_edge_is_rejected() {
+        // Only 20 px pokes onto the screen, less than the 48 px margin.
+        assert!(!is_on_screen(-280.0, 200.0, 300.0, 120.0, SCREEN));
+        assert!(!is_on_screen(200.0, 1060.0, 300.0, 120.0, SCREEN));
+    }
+
+    #[test]
+    fn negative_coordinates_are_handled() {
+        // A screen to the left of the primary has negative coordinates.
+        let multi: (f32, f32, f32, f32) = (-1920.0, 0.0, 1920.0, 1080.0);
+        assert!(is_on_screen(-500.0, 100.0, 300.0, 120.0, multi));
+    }
 }

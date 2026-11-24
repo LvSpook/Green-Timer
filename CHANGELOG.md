@@ -1,6 +1,21 @@
 > **Work in Progress (Pre-Release)** — This build is actively in development. Features and UI may continue to evolve, and feedback or bug reports are welcome!
 
-## What's New in v1.3.2 (WIP)
+## What's New in v1.3.3 (WIP)
+
+### Reliability
+- **Only one copy can run.** Launching `GreenTimer.exe` again now brings the running overlay back into view instead of starting a second timer and a second tray icon.
+- **The window can no longer get lost.** If a saved position lands off-screen — after unplugging a monitor or changing resolution — the overlay returns to the top-right of the primary screen on the next launch.
+- **Escape no longer quits.** It hides the overlay to the tray, so a stray keypress can never stop a running timer. Quit is still on the tray menu and in Settings.
+- **Frame rate independent fluid animation.** The Fluid display style now moves at the same speed on a 60 Hz, 144 Hz or throttled display, and stays still when Reduce motion is on.
+- **Log rotation keeps working.** The older log copy is now capped as well, so a long-running install cannot build up unbounded logs.
+
+### First Run
+- **The settings window opens once on a fresh install**, so the hotkeys, modes and appearance are discoverable immediately. Later launches stay out of the way.
+
+### Under the Hood
+- Removed dead code, made the settings enums derive their defaults, and cleared every Clippy warning in the project.
+
+## What's New in v1.3.2
 
 ### Global Hotkeys
 - **Custom hotkeys.** Add your own extra bindings on the Hotkeys tab: pick any action from a dropdown, press Record, and that key does it too. `+` adds another row and `−` removes one. The built-in keys keep working, and a key already in use is reported instead of silently failing.

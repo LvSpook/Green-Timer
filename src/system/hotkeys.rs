@@ -126,7 +126,7 @@ pub struct HotkeyManager {
 
 impl HotkeyManager {
     pub fn new() -> Self {
-        hotkeys::install();
+        hook::install();
         HotkeyManager {
             failures: Vec::new(),
         }
@@ -140,12 +140,12 @@ impl HotkeyManager {
     pub fn rebind(&mut self, config: &Config) {
         let (bindings, failures) = build_bindings(config);
         self.failures = failures;
-        hotkeys::set_bindings(bindings);
+        hook::set_bindings(bindings);
     }
 
     /// Drain pending hotkey events. Called once per frame.
     pub fn poll(&self) -> Vec<Action> {
-        hotkeys::drain()
+        hook::drain()
     }
 }
 
@@ -157,7 +157,7 @@ impl Default for HotkeyManager {
 
 /// The low-level hook: bindings storage, dispatch channel and key capture.
 #[cfg(windows)]
-mod hotkeys {
+mod hook {
     use super::{Action, Bindings};
     use std::sync::mpsc::{channel, Receiver, Sender};
     use std::sync::{Mutex, OnceLock};
@@ -365,7 +365,7 @@ mod hotkeys {
 }
 
 #[cfg(not(windows))]
-mod hotkeys {
+mod hook {
     use super::{Action, Bindings};
     use std::sync::mpsc::{channel, Receiver};
 
@@ -380,8 +380,8 @@ mod hotkeys {
     pub fn cancel_capture() {}
 }
 
-pub use hotkeys::capture_next;
-pub use hotkeys::cancel_capture;
+pub use hook::capture_next;
+pub use hook::cancel_capture;
 
 #[cfg(test)]
 mod tests {

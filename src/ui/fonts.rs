@@ -63,7 +63,7 @@ pub fn load_family(family: &str) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
     let bold = source
         .select_best_match(
             &[font_kit::family_name::FamilyName::Title(family.to_string())],
-            &font_kit::properties::Properties::new().weight(font_kit::properties::Weight::BOLD),
+            font_kit::properties::Properties::new().weight(font_kit::properties::Weight::BOLD),
         )
         .ok()
         .and_then(|handle| read(&handle));
@@ -85,14 +85,14 @@ pub fn install(ctx: &egui::Context, family: &str) {
     let regular_key = format!("user-{resolved}");
     fonts
         .font_data
-        .insert(regular_key.clone(), egui::FontData::from_owned(regular).into());
+        .insert(regular_key.clone(), egui::FontData::from_owned(regular));
 
     let bold_name = bold_family_name(&resolved);
     let bold_key = bold.map(|bytes| {
         let key = format!("user-{resolved}-bold");
         fonts
             .font_data
-            .insert(key.clone(), egui::FontData::from_owned(bytes).into());
+            .insert(key.clone(), egui::FontData::from_owned(bytes));
         key
     });
 

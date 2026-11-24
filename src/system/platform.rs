@@ -17,10 +17,17 @@ mod imp {
         PlaySoundW, SND_ALIAS, SND_ASYNC, SND_FILENAME, SND_NODEFAULT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowLongW, SetWindowLongW, SetWindowPos, SystemParametersInfoW,
-        GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, WS_EX_TRANSPARENT,
+        GetForegroundWindow, GetWindowLongW, IsWindowVisible, SetWindowLongW, SetWindowPos,
+        SystemParametersInfoW, GWL_EXSTYLE, HWND_NOTOPMOST, HWND_TOPMOST, SPI_GETWORKAREA,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+        WS_EX_TRANSPARENT,
     };
+
+    /// Name of the per-session mutex that marks "Green Timer is running".
+    ///
+    /// `Local\` scopes it to the signed-in user's session, so separate users
+    /// on the same machine each get their own overlay.
+    const INSTANCE_MUTEX: &str = "Local\\GreenTimer.SingleInstance";
 
     fn hwnd(value: isize) -> HWND {
         HWND(value as *mut c_void)
@@ -96,6 +103,84 @@ mod imp {
 
     pub fn foreground_window() -> u64 {
         unsafe { GetForegroundWindow().0 as u64 }
+    }
+
+    /// Whether the OS currently shows this window. Used to stay in sync when
+    /// something outside egui (such as a second launch) changes visibility.
+    pub fn is_window_visible(window: isize) -> bool {
+        unsafe { IsWindowVisible(hwnd(window)).as_bool() }
+    }
+
+    /// Try to become the one running copy. Returns `false` when another copy
+    /// already holds the mutex.
+    ///
+    /// The handle is intentionally leaked: the OS releases it when the process
+    /// ends, which is exactly the lifetime we want.
+    /// Handle of the mutex we own, kept for the life of the process. Windows
+    /// releases it automatically when the process exits, so it is stored as a
+    /// plain integer to avoid needing a destructor or `Send`/`Sync`.
+    static INSTANCE_HANDLE: std::sync::OnceLock<isize> = std::sync::OnceLock::new();
+
+    pub fn claim_single_instance() -> bool {
+        use windows::Win32::Foundation::{
+            ERROR_ALREADY_EXISTS, GetLastError, SetLastError, WIN32_ERROR,
+        };
+        use windows::Win32::System::Threading::CreateMutexW;
+
+        let name = wide(INSTANCE_MUTEX);
+        // `CreateMutexW` reports "already exists" through the last-error slot,
+        // so clear it first rather than relying on whatever was there before.
+        unsafe { SetLastError(WIN32_ERROR(0)) };
+        let handle = unsafe { CreateMutexW(None, false, PCWSTR(name.as_ptr())) };
+        match handle {
+            Ok(handle) => {
+                let already = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+                if already {
+                    // Not ours; close it so we do not hold a stray handle.
+                    let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
+                    false
+                } else {
+                    let _ = INSTANCE_HANDLE.set(handle.0 as isize);
+                    true
+                }
+            }
+            Err(err) => {
+                // If the mutex cannot even be created, running is still better
+                // than silently refusing to start.
+                log::warn!("Could not create the single-instance mutex: {err}");
+                true
+            }
+        }
+    }
+
+    /// Bring an already-running copy's overlay to the front.
+    ///
+    /// Returns `true` when a window was found, so the new process can exit
+    /// quietly instead of starting a second overlay.
+    pub fn focus_existing_window(title: &str) -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE, SW_SHOW,
+        };
+
+        let title = wide(title);
+        let found = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) };
+        let Ok(window) = found else {
+            return false;
+        };
+        if window.0.is_null() {
+            return false;
+        }
+        unsafe {
+            // The overlay may have been hidden to the tray, so show it rather
+            // than merely raising it.
+            if IsIconic(window).as_bool() {
+                let _ = ShowWindow(window, SW_RESTORE);
+            } else {
+                let _ = ShowWindow(window, SW_SHOW);
+            }
+            let _ = SetForegroundWindow(window);
+        }
+        true
     }
 
     /// Native yes/no prompt. Lives here because it needs the wide-string helper.
@@ -214,6 +299,15 @@ mod imp {
     }
     pub fn play_sound(_path: &str) {}
     pub fn open_url(_url: &str) {}
+    pub fn claim_single_instance() -> bool {
+        true
+    }
+    pub fn focus_existing_window(_title: &str) -> bool {
+        false
+    }
+    pub fn is_window_visible(_window: isize) -> bool {
+        true
+    }
 }
 
 pub const IS_WINDOWS: bool = cfg!(windows);
@@ -282,4 +376,19 @@ pub fn system_info() -> String {
         std::env::consts::ARCH,
         std::env::consts::FAMILY
     )
+}
+
+/// Claim the one-copy-per-session lock. `false` means another copy is running.
+pub fn claim_single_instance() -> bool {
+    imp::claim_single_instance()
+}
+
+/// Raise an already-running copy's window. `true` when one was found.
+pub fn focus_existing_window(title: &str) -> bool {
+    imp::focus_existing_window(title)
+}
+
+/// Whether the OS currently shows this window.
+pub fn is_window_visible(window: isize) -> bool {
+    imp::is_window_visible(window)
 }

@@ -102,7 +102,11 @@ Grab the installer from the [latest release](https://github.com/LvSpook/Green-Ti
 
 Rebind them under **Settings → Hotkeys**. Right-click the overlay for a quick
 menu; double-click it to start or pause. Drag any corner to scale the text to
-fit.
+fit. `Esc` hides the overlay to the tray without stopping the timer; click the
+tray icon or press the show/hide hotkey to bring it back.
+
+Green Timer only runs one copy at a time: launching it again reveals the window
+that is already running instead of starting a second overlay.
 
 ## 🔨 Running from source
 
@@ -126,7 +130,8 @@ is installed, compiles `Output\GreenTimer_Setup_v<version>.exe`.
 
 Release builds are GUI-only, so no console window appears when the app starts.
 Logs are written to the file below (rolled over to `green_timer.log.old` once it
-passes 1 MB); `cargo run` in a debug build also prints them to the terminal.
+passes 1 MB, and the previous log is capped too); `cargo run` in a debug build
+also prints them to the terminal.
 
 ## 📁 Settings file locations
 
