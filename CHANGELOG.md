@@ -1,6 +1,9 @@
 > **Work in Progress (Pre-Release)** — This build is actively in development. Features and UI may continue to evolve, and feedback or bug reports are welcome!
 
-## What's New in v1.3.0 (WIP)
+## What's New in v1.3.1 (WIP)
+
+### Installer & Packaging
+- **Standalone exe now has its own icon.** The icon and version details are compiled into `GreenTimer.exe`, so a single-file download shows the Green Timer icon in Explorer, on the desktop, and in Alt-Tab instead of the generic executable icon. It no longer needs the separate `.ico` beside it.
 
 ### Timer Modes & Controls
 - **Interval (HIIT) Mode**: Configurable Work, Rest, and Rounds with automatic phase transitions.
@@ -28,7 +31,6 @@
 - **Hover Tooltips**: Short descriptions appear after hovering over non-self-explanatory option labels.
 
 ### Project & Fixes
-- **Standalone exe now has its own icon.** The icon and version details are compiled into `GreenTimer.exe`, so a single-file download looks right in Explorer, on the desktop, and in Alt-Tab instead of showing the generic executable icon. It also no longer needs the separate `.ico` beside it.
 - Fixed Settings window taskbar icon appearing as a black square.
 - Updated system tray icon & menu with live theming and new quick toggles.
 - Organized Rust source into `src/core/`, `src/ui/`, and `src/system/`.
