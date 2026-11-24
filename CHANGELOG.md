@@ -16,6 +16,12 @@
 - **The edge distance no longer jumps as the timer changes.** The panel now measures the digits in fixed-width slots that assume a `0`, so every digit sits the same distance from the background edge. When a leading zero disappears the panel shrinks toward the middle by exactly one slot instead of snapping to the digits.
 - **The distance is adjustable** on the Appearance tab as "Edge distance", and it applies equally to the left/right and top/bottom edges. The outline and shadow get their own extra room, so the visible gap stays exactly what you set.
 
+### Notes
+- **One note, saved between launches.** Left-click the timer to open a small square note window underneath it, type, and the text is kept automatically. A click elsewhere, Escape, or the × closes it without losing anything.
+- **Double-click still pauses the timer.** A single click waits out the double-click window first, so a double-click never pops the note open as well.
+- **The note follows your theme,** and global hotkeys are paused while you type so a bound letter types instead of firing its shortcut.
+- **A new Notes tab in Settings** holds the whole note text, with its own **Save Note** and **Clear Note** buttons. Saving or clearing there updates an open note window straight away, and Cancel does not undo a note you already saved.
+
 ### Under the Hood
 - Removed dead code, made the settings enums derive their defaults, and cleared every Clippy warning in the project.
 

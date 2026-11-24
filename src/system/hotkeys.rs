@@ -179,6 +179,9 @@ mod hook {
     /// key being recorded does not also trigger its old action.
     static CAPTURE_PENDING: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
+    /// Set while the note is being typed in: every letter would otherwise fire
+    /// a global hotkey while the editor has no way to swallow it.
+    static SUSPENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     fn bindings() -> &'static Mutex<Bindings> {
         BINDINGS.get_or_init(|| Mutex::new(Vec::new()))
@@ -242,7 +245,12 @@ mod hook {
 
                 // Recording suppresses dispatch so the recorded key does not
                 // also fire its old action.
-                if !CAPTURE_PENDING.load(std::sync::atomic::Ordering::Relaxed) {
+                // Recording suppresses dispatch so the recorded key does not
+                // also fire its old action; typing in the note suppresses it
+                // too, so letters do not trigger shortcuts.
+                if !CAPTURE_PENDING.load(std::sync::atomic::Ordering::Relaxed)
+                    && !SUSPENDED.load(std::sync::atomic::Ordering::Relaxed)
+                {
                     if let Ok(list) = bindings().lock() {
                         if let Some((_, action)) = list.iter().find(|(code, _)| *code == scan) {
                             if let Ok(guard) = action_sender().lock() {
@@ -337,6 +345,12 @@ mod hook {
         CAPTURE_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Hold or release global dispatch while a text box has the keyboard, so
+    /// typing a note cannot trigger shortcuts.
+    pub fn set_suspended(suspended: bool) {
+        SUSPENDED.store(suspended, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Down state of every virtual key (indexed by the key's low byte).
     ///
     /// Recording polls key state instead of using the hook: Windows silently
@@ -378,10 +392,12 @@ mod hook {
         channel().1
     }
     pub fn cancel_capture() {}
+    pub fn set_suspended(_suspended: bool) {}
 }
 
 pub use hook::capture_next;
 pub use hook::cancel_capture;
+pub use hook::set_suspended;
 
 #[cfg(test)]
 mod tests {

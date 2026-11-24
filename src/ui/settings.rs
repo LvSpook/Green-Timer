@@ -24,6 +24,7 @@ enum Tab {
     General,
     Appearance,
     Behavior,
+    Notes,
     Hotkeys,
     About,
 }
@@ -73,6 +74,10 @@ pub struct SettingsState {
     search_query: String,
     /// Draft being edited in the Custom Theme Builder.
     theme_builder: crate::config::CustomTheme,
+    /// Text in the Notes tab's editor. Saved only when Save is pressed.
+    note_draft: String,
+    /// Brief feedback under the note editor.
+    note_status: Option<String>,
 }
 
 #[derive(Default)]
@@ -125,6 +130,8 @@ impl Default for SettingsState {
             io_status: None,
             search_query: String::new(),
             theme_builder: crate::config::CustomTheme::default(),
+            note_draft: String::new(),
+            note_status: None,
         }
     }
 }
@@ -165,6 +172,8 @@ impl SettingsState {
         self.original = config.clone();
         self.live = Some(config.clone());
         self.sync_text();
+        self.note_draft = config.note.clone();
+        self.note_status = None;
         self.stop_recording();
         self.confirm_defaults = false;
         self.hotkey_message = None;
@@ -310,6 +319,10 @@ impl SettingsState {
                                         self.behavior_tab(ui, app);
                                         Outcome::None
                                     }
+                                    Tab::Notes => {
+                                        self.notes_tab(ui, app);
+                                        Outcome::None
+                                    }
                                     Tab::Hotkeys => {
                                         self.hotkeys_tab(ui);
                                         Outcome::None
@@ -380,6 +393,7 @@ impl SettingsState {
                 (Tab::General, "General"),
                 (Tab::Appearance, "Appearance"),
                 (Tab::Behavior, "Behavior"),
+                (Tab::Notes, "Notes"),
                 (Tab::Hotkeys, "Hotkeys"),
                 (Tab::About, "About"),
             ] {
@@ -434,6 +448,7 @@ impl SettingsState {
             ("Right-Click Menu Items customizer", "Behavior", Tab::Behavior),
             ("Saved Profiles & Per-App Auto-Switch", "Behavior", Tab::Behavior),
             ("Import / Export Settings (JSON)", "Behavior", Tab::Behavior),
+            ("Note (single note, opens on left-click)", "Notes", Tab::Notes),
             ("Global Hotkeys (Start/Pause, Reset, Lap, Ghost, Show/Hide, Mini-Mode)", "Hotkeys", Tab::Hotkeys),
             ("Custom hotkeys (extra bindings for any action)", "Hotkeys", Tab::Hotkeys),
             ("Updates & About", "About", Tab::About),
@@ -1402,6 +1417,74 @@ impl SettingsState {
         }
     }
 
+    /// The Notes tab: one note, saved and cleared explicitly.
+    ///
+    /// The note is deliberately kept out of the live-preview draft: it has its
+    /// own Save button, and previewing it would let the open note window and
+    /// this editor overwrite each other while typing.
+    fn notes_tab(&mut self, ui: &mut egui::Ui, app: &mut TimerApp) {
+        ui.label(egui::RichText::new("Note").strong());
+        ui.small(
+            "One note, saved between launches. Left-click the timer to open it in a \
+             window beneath the overlay.",
+        );
+        ui.add_space(6.0);
+
+        ui.add(
+            egui::TextEdit::multiline(&mut self.note_draft)
+                .desired_width(f32::INFINITY)
+                .desired_rows(12)
+                .hint_text("Type a note\u{2026}")
+                .char_limit(crate::config::NOTE_MAX_CHARS),
+        );
+
+        let used = self.note_draft.chars().count();
+        ui.horizontal(|ui| {
+            ui.small(format!("{used} / {}", crate::config::NOTE_MAX_CHARS));
+        });
+        ui.add_space(6.0);
+
+        let dirty = self.note_draft != self.draft.note;
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(dirty, egui::Button::new("Save Note"))
+                .on_hover_text("Save the note; it is written to disk immediately")
+                .clicked()
+            {
+                self.save_note(app);
+            }
+            if ui
+                .add_enabled(!self.draft.note.is_empty(), egui::Button::new("Clear Note"))
+                .on_hover_text("Delete the note and save the empty note")
+                .clicked()
+            {
+                self.note_draft.clear();
+                self.save_note(app);
+                self.note_status = Some("Note cleared.".to_string());
+            }
+        });
+
+        if let Some(status) = &self.note_status {
+            ui.add_space(4.0);
+            ui.small(status);
+        }
+    }
+
+    /// Persist the Notes tab's editor text, and let an open note window adopt it.
+    fn save_note(&mut self, app: &mut TimerApp) {
+        let text: String = self
+            .note_draft
+            .chars()
+            .take(crate::config::NOTE_MAX_CHARS)
+            .collect();
+        self.note_draft = text.clone();
+        self.draft.note = text.clone();
+        app.config.note = text.clone();
+        crate::note::set_text(&text);
+        app.persist();
+        self.note_status = Some("Note saved.".to_string());
+    }
+
     fn hotkeys_tab(&mut self, ui: &mut egui::Ui) {
         ui.label(
             "Hotkeys are global. Click Record, then press the key you want to use.\n\
@@ -1715,6 +1798,9 @@ impl SettingsState {
         // pressing any control would snap a dragged or grip-resized window
         // back to the geometry from when the dialog opened.
         self.adopt_live_state(&app.config);
+        // The note is edited and saved by its own buttons, so the preview must
+        // never push the draft's copy over one written by the note window.
+        self.draft.note = app.config.note.clone();
 
         let Some(config) = self.collect() else {
             self.invalid_hint = true;
@@ -1756,10 +1842,14 @@ impl SettingsState {
     /// with (Cancel / title-bar close).
     fn cancel(&mut self, app: &mut TimerApp) {
         let original = self.original.clone();
+        // The note is saved immediately by the Notes tab, so Cancel must not
+        // roll it back to the text from when the dialog opened.
+        let note = app.config.note.clone();
         let font_changed = app.config.font_family != original.font_family;
         let sprite_changed = app.config.sprite_path != original.sprite_path;
 
         app.config = original;
+        app.config.note = note;
         app.font_size = app.config.font_size as f32;
         if font_changed {
             if let Some(ctx) = crate::app::current_context() {
@@ -1775,6 +1865,7 @@ impl SettingsState {
         app.refresh();
 
         self.draft = app.config.clone();
+        self.note_draft = app.config.note.clone();
         self.live = Some(app.config.clone());
         self.sync_text();
         self.invalid_hint = false;
@@ -1793,12 +1884,25 @@ impl SettingsState {
         let mode_or_duration_changed = self.original.mode != draft.mode
             || (self.original.countdown_start - draft.countdown_start).abs() > f64::EPSILON
             || (self.original.pomo_work - draft.pomo_work).abs() > f64::EPSILON;
+        // The note editor is not part of the live preview, so carry whatever is
+        // in it now: Save & Apply must not silently discard unsaved typing.
+        let mut draft = draft;
+        draft.note = self
+            .note_draft
+            .chars()
+            .take(crate::config::NOTE_MAX_CHARS)
+            .collect();
+        let note_changed = app.config.note != draft.note;
         let sprite_changed = app.config.sprite_path != draft.sprite_path;
         let font_changed = app.config.font_family != draft.font_family;
 
         app.config = draft;
         self.draft = app.config.clone();
+        self.note_draft = app.config.note.clone();
         self.live = Some(app.config.clone());
+        if note_changed {
+            crate::note::set_text(&app.config.note);
+        }
         app.font_size = app.config.font_size as f32;
         self.sync_text();
         self.hotkey_message = None;

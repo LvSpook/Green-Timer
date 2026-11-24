@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 
 pub const CONFIG_FILENAME: &str = "timer_pro_settings.json";
 
+/// Longest note the editor accepts, in characters.
+pub const NOTE_MAX_CHARS: usize = 2_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -348,6 +351,8 @@ pub struct Config {
     pub hk_mini_mode: Hotkey,
     /// Extra user-added bindings, in addition to the seven built-in ones.
     pub hk_custom: Vec<CustomHotkey>,
+    /// The single free-form note. Empty when no note is saved.
+    pub note: String,
     pub context_menu: ContextMenuConfig,
     pub profiles: Vec<SavedProfile>,
     pub app_profile_rules: Vec<AppProfileRule>,
@@ -431,6 +436,7 @@ impl Default for Config {
             hk_visibility: Hotkey::new("f11", 87),
             hk_mini_mode: Hotkey::new("f12", 88),
             hk_custom: Vec::new(),
+            note: String::new(),
             context_menu: ContextMenuConfig::default(),
             profiles: Vec::new(),
             app_profile_rules: Vec::new(),
@@ -531,6 +537,9 @@ impl Config {
         if self.font_family.trim().is_empty() {
             self.font_family = "Segoe UI".to_string();
         }
+        // A note is one short reminder, not a document; the cap also keeps a
+        // corrupted file from bloating the settings.
+        self.note = self.note.chars().take(NOTE_MAX_CHARS).collect();
         self
     }
 }
@@ -689,6 +698,58 @@ mod tests {
     }
 
     #[test]
+    fn the_note_survives_a_save_and_reload() {
+        let mut cfg = Config::default();
+        cfg.note = "Buy milk\nCall back \u{2014} 09:30".to_string();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.note, cfg.note, "newlines and accents are preserved");
+    }
+
+    #[test]
+    fn an_overlong_note_is_truncated_on_load() {
+        let cfg = Config::default();
+        let mut too_long = cfg.clone();
+        too_long.note = "x".repeat(NOTE_MAX_CHARS + 500);
+        let cfg = too_long.validated();
+        assert_eq!(cfg.note.chars().count(), NOTE_MAX_CHARS);
+    }
+
+    #[test]
+    fn truncation_counts_characters_not_bytes() {
+        let mut cfg = Config::default();
+        // Three bytes each, so a byte-based cut would split one in half.
+        cfg.note = "\u{2713}".repeat(NOTE_MAX_CHARS + 3);
+        let cfg = cfg.validated();
+        assert_eq!(cfg.note.chars().count(), NOTE_MAX_CHARS);
+    }
+
+    #[test]
+    fn the_note_is_not_shared_between_profiles() {
+        let mut cfg = Config::default();
+        cfg.note = "profile-specific".to_string();
+        cfg.profiles.push(SavedProfile {
+            name: "Work".to_string(),
+            settings: serde_json::to_value(Config::default()).unwrap(),
+        });
+        let restored = cfg
+            .profiles
+            .iter()
+            .find(|p| p.name == "Work")
+            .and_then(|p| serde_json::from_value::<Config>(p.settings.clone()).ok())
+            .map(|c| c.validated());
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            json.contains("profile-specific"),
+            "the note is written to the settings file"
+        );
+        assert!(
+            restored.is_some_and(|c| c.note.is_empty()),
+            "loading a profile does not carry the current note over"
+        );
+    }
+
+    #[test]
     fn missing_fields_use_defaults() {
         // Simulates an old settings file that predates newer options.
         let json = r##"{"mode":"down","pomo_work":30.5,"normal_color":"#123456"}"##;
@@ -698,7 +759,8 @@ mod tests {
         assert_eq!(cfg.normal_color, Rgb(0x12, 0x34, 0x56));
         assert_eq!(cfg.font_family, "Segoe UI");
         assert!(!cfg.reduce_motion);
-        // Newer than the file: pre-release updates default off.
+        // Newer than the file: no note and pre-release updates off.
+        assert!(cfg.note.is_empty());
         assert!(!cfg.include_prereleases);
         assert!(cfg.auto_check_updates);
     }

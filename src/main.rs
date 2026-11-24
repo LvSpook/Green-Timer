@@ -12,7 +12,7 @@ mod ui;
 
 pub use crate::core::{config, engine, formatting};
 pub use crate::system::{hotkeys, platform, tray, updater};
-pub use crate::ui::{fonts, hint, menu, render, settings};
+pub use crate::ui::{fonts, hint, menu, note, render, settings};
 
 pub const APP_NAME: &str = "Green Timer";
 pub const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));

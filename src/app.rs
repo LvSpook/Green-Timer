@@ -51,6 +51,13 @@ pub struct TimerApp {
     pre_mini_font_size: Option<u32>,
     /// Time of the previous frame, for frame-rate independent animation.
     last_frame: Instant,
+    /// A left-click that is waiting out the double-click window before it opens
+    /// the note, so a double-click (pause) never also opens the note.
+    note_click_at: Option<Instant>,
+    /// When an edit in the note window should be written to disk. Kept short so
+    /// a crash loses at most a moment's typing, but long enough that a burst of
+    /// keystrokes does not rewrite the settings file on every character.
+    note_save_at: Option<Instant>,
     /// Whether the first tick has produced text. Before that the geometry is
     /// whatever the config says, and measuring empty text would collapse it.
     measured_once: bool,
@@ -137,6 +144,8 @@ impl TimerApp {
             last_auto_profile: None,
             pre_mini_font_size: None,
             last_frame: Instant::now(),
+            note_click_at: None,
+            note_save_at: None,
             measured_once: false,
             visibility_requested: None,
         }
@@ -489,8 +498,13 @@ impl TimerApp {
         // Escape hides the overlay; it does not quit, so a stray keypress can
         // never end a running timer. Quit stays on the tray menu and the
         // settings dialog. Space toggles, matching the original. While the
-        // menu is open it owns the keyboard, so presses must not leak through.
-        if self.show_window && !self.config.ghost_mode && !crate::menu::is_open() {
+        // menu or the note is open it owns the keyboard, so presses must not
+        // leak through.
+        if self.show_window
+            && !self.config.ghost_mode
+            && !crate::menu::is_open()
+            && !crate::note::is_open()
+        {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                 // Hiding is only safe with a tray icon to bring it back.
                 if self.tray.is_available() {
@@ -767,6 +781,8 @@ impl eframe::App for TimerApp {
         }
 
         self.context_menu(ctx);
+        crate::note::show(ctx, &self.config);
+        self.poll_note_edit();
 
         if self.settings.open {
             // Move the state out so the settings window can borrow the app
@@ -923,12 +939,40 @@ impl TimerApp {
             }
         }
 
-        if response.double_clicked() && self.config.mode != Mode::Clock {
-            self.toggle();
+        // A double-click always cancels a pending note open, even in clock mode
+        // where it has no other effect.
+        if response.double_clicked() {
+            self.note_click_at = None;
+            if self.config.mode != Mode::Clock {
+                self.toggle();
+            }
         }
 
         if !self.config.window_locked && response.drag_started() {
+            // Dragging is not a note request.
+            self.note_click_at = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+
+        // A single left-click opens the note, but a double-click means pause, so
+        // the open waits out egui's own double-click window (300 ms) first. A
+        // second click in that time cancels it and the note never appears.
+        //
+        // A click that just dismissed the note is ignored here, or the same
+        // click would close the window and immediately reopen it.
+        if response.clicked()
+            && !response.double_clicked()
+            && !crate::note::is_open()
+            && !crate::note::just_dismissed()
+        {
+            self.note_click_at = Some(Instant::now());
+            ctx.request_repaint_after(std::time::Duration::from_millis(340));
+        }
+        if let Some(at) = self.note_click_at {
+            if at.elapsed() >= std::time::Duration::from_millis(320) {
+                self.note_click_at = None;
+                self.toggle_note(ctx, rect);
+            }
         }
 
         // The menu is its own OS window rather than an egui `context_menu`,
@@ -947,6 +991,58 @@ impl TimerApp {
                 .input(|i| i.viewport().outer_rect.map(|r| r.min))
                 .unwrap_or(egui::Pos2::ZERO);
             crate::menu::open(origin + pos.to_vec2());
+            self.persist();
+        }
+    }
+
+    /// Show or hide the note window. The note itself lives in the config, so it
+    /// is already loaded and saved with every other setting.
+    fn toggle_note(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        if crate::note::is_open() {
+            crate::note::close();
+            ctx.request_repaint();
+            return;
+        }
+        // The click that dismissed the note must not open it again.
+        if crate::note::just_dismissed() {
+            return;
+        }
+        // `rect` is viewport-local; placement needs monitor coordinates.
+        let origin = ctx
+            .input(|i| i.viewport().outer_rect.map(|r| r.min))
+            .unwrap_or(egui::Pos2::ZERO);
+        let anchor = rect.translate(origin.to_vec2());
+        crate::note::open(anchor, &self.config.note);
+    }
+
+    /// Persist the note text edited in the note window.
+    ///
+    /// The text is adopted immediately so everything else already sees it; the
+    /// write to disk waits for a short pause in typing, and for the window
+    /// closing.
+    fn poll_note_edit(&mut self) {
+        if let Some(text) = crate::note::take_edit() {
+            if self.config.note != text {
+                self.config.note = text;
+                self.note_save_at =
+                    Some(Instant::now() + std::time::Duration::from_millis(600));
+            }
+        }
+        match self.note_save_at {
+            Some(at) if Instant::now() >= at => {
+                self.note_save_at = None;
+                self.persist();
+            }
+            Some(_) => {
+                if let Some(ctx) = self::current_context() {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(120));
+                }
+            }
+            None => {}
+        }
+        // Closing the window must not wait out the debounce.
+        if !crate::note::is_open() && self.note_save_at.is_some() {
+            self.note_save_at = None;
             self.persist();
         }
     }
