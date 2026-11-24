@@ -325,6 +325,9 @@ pub struct Config {
     pub reduce_motion: bool,
     pub start_minimized: bool,
     pub hide_leading_zeros: bool,
+    /// The right-click tip is still to be shown. Enabled only on a brand-new
+    /// install, so it never appears on an update.
+    pub show_first_run_tip: bool,
     pub interval_work: f64,
     pub interval_rest: f64,
     pub interval_rounds: u32,
@@ -408,6 +411,7 @@ impl Default for Config {
             reduce_motion: false,
             start_minimized: false,
             hide_leading_zeros: false,
+            show_first_run_tip: false,
             interval_work: 40.0,
             interval_rest: 20.0,
             interval_rounds: 8,

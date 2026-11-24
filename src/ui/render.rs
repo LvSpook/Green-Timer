@@ -471,7 +471,11 @@ pub fn themed_icon_rgba(p: UiPalette) -> (Vec<u8>, u32, u32) {
             let idx = (y * SIZE + x) * 4;
 
             if dist <= outer_r {
-                let col = if dist >= inner_r { p.accent } else { p.window_bg };
+                let col = if dist >= inner_r {
+                    p.accent
+                } else {
+                    p.window_bg
+                };
                 let edge_alpha = ((outer_r - dist).clamp(0.0, 1.0) * 255.0).round() as u8;
                 rgba[idx] = col.r();
                 rgba[idx + 1] = col.g();
@@ -564,18 +568,19 @@ pub fn draw_text(
         return;
     }
 
-    let galley = ctx.fonts(|fonts| {
-        let job = egui::text::LayoutJob::simple_singleline(
-            text.to_owned(),
-            FontId::new(size, family.clone()),
-            fill,
-        );
-        fonts.layout_job(job)
-    });
+    // Each digit is drawn inside the slot a `0` would occupy, so the gap
+    // between the digits and the panel edge is identical for every digit and
+    // only changes when a whole slot (a leading zero) is dropped.
+    let (slots, _) = layout_slots(ctx, family, text, size);
 
     // `center` is expressed in the unrotated layout space, so it must be
     // rotated about the window centre to land in the right place.
-    let center = orientation.point(center);
+    let paint = |color: Color32, offset: Vec2| {
+        for slot in &slots {
+            let center = orientation.point(center + slot.paint) + orientation.vector(offset);
+            paint_galley(painter, &slot.galley, center, color, orientation.angle);
+        }
+    };
 
     if config.theme == Theme::Chalkboard {
         // Chalk rubbed onto the board: seven offset, low-opacity passes then a
@@ -589,23 +594,19 @@ pub fn draw_text(
             (0.0, 2.0, 60),
             (2.0, 0.0, 60),
         ] {
-            paint_galley(
-                painter,
-                &galley,
-                center + orientation.vector(Vec2::new(dx, dy)),
+            paint(
                 Color32::from_rgba_unmultiplied(fill.r(), fill.g(), fill.b(), alpha),
-                orientation.angle,
+                Vec2::new(dx, dy),
             );
         }
-        paint_galley(painter, &galley, center, fill, orientation.angle);
+        paint(fill, Vec2::ZERO);
         return;
     }
 
     if config.use_text_shadow {
         let shadow_alpha = (fill.a() as f32 * 0.55).round() as u8;
         let shadow_color = Color32::from_rgba_unmultiplied(0, 0, 0, shadow_alpha);
-        let offset = orientation.vector(Vec2::new(2.5, 3.0));
-        paint_galley(painter, &galley, center + offset, shadow_color, orientation.angle);
+        paint(shadow_color, Vec2::new(2.5, 3.0));
     }
 
     if config.text_outline {
@@ -615,12 +616,128 @@ pub fn draw_text(
         let outline_color = to_color32(config.text_outline_color, fill.a());
         for step in 0..steps {
             let theta = step as f32 / steps as f32 * std::f32::consts::TAU;
-            let delta = orientation.vector(Vec2::new(theta.cos(), theta.sin()) * radius);
-            paint_galley(painter, &galley, center + delta, outline_color, orientation.angle);
+            let delta = Vec2::new(theta.cos(), theta.sin()) * radius;
+            paint(outline_color, delta);
         }
     }
 
-    paint_galley(painter, &galley, center, fill, orientation.angle);
+    paint(fill, Vec2::ZERO);
+}
+
+/// One character of the timer text, positioned for painting.
+struct Slot {
+    galley: Arc<egui::Galley>,
+    /// Where to paint the galley's layout box, relative to the reference box's
+    /// centre.
+    paint: Vec2,
+}
+
+/// The box a galley actually paints, ignoring line leading.
+fn ink_rect(galley: &egui::Galley) -> Rect {
+    if galley.mesh_bounds.is_positive() {
+        galley.mesh_bounds
+    } else {
+        galley.rect
+    }
+}
+
+/// Lay out `text` one character per `0`-wide slot, plus the reference box.
+///
+/// The reference box is what a `0` would paint in the first and last slots, so
+/// the window edge keeps the same distance from the digits whichever digit is
+/// showing, and dropping a leading zero removes exactly one slot.
+fn layout_slots(
+    ctx: &egui::Context,
+    family: &FontFamily,
+    text: &str,
+    size: f32,
+) -> (Vec<Slot>, Rect) {
+    let font = FontId::new(size, family.clone());
+    let (slot_rects, zero_ink) = ctx.fonts(|fonts| {
+        let galley = fonts.layout_job(egui::text::LayoutJob::simple_singleline(
+            slot_text(text),
+            font.clone(),
+            Color32::WHITE,
+        ));
+        let zero = fonts.layout_job(egui::text::LayoutJob::simple_singleline(
+            "0".to_owned(),
+            font.clone(),
+            Color32::WHITE,
+        ));
+        let Some(row) = galley.rows.first() else {
+            return (Vec::new(), Rect::ZERO);
+        };
+        let rects = row
+            .glyphs
+            .iter()
+            .map(|glyph| {
+                Rect::from_min_size(
+                    Pos2::new(glyph.pos.x, row.rect.top()),
+                    Vec2::new(glyph.advance_width, row.rect.height()),
+                )
+            })
+            .collect::<Vec<_>>();
+        (rects, ink_rect(&zero))
+    });
+
+    if slot_rects.is_empty() {
+        return (Vec::new(), Rect::ZERO);
+    }
+
+    let (first, last) = (slot_rects[0], slot_rects[slot_rects.len() - 1]);
+    // The reference box is a `0` in the first and last slots: exactly as wide
+    // as the text would be if every digit were a zero. Its centre is where the
+    // timer text is anchored.
+    let left = first.left() + zero_ink.min.x;
+    let right = last.left() + zero_ink.max.x;
+    let reference_center = Pos2::new((left + right) / 2.0, first.center().y);
+
+    let slots = text
+        .chars()
+        .zip(&slot_rects)
+        .map(|(character, slot)| {
+            let galley = ctx.fonts(|fonts| {
+                fonts.layout_job(egui::text::LayoutJob::simple_singleline(
+                    character.to_string(),
+                    font.clone(),
+                    Color32::WHITE,
+                ))
+            });
+            // Centre each glyph's ink in its fixed slot, so a narrow `1` never
+            // shifts the digits around it or the panel edge.
+            let ink = ink_rect(&galley);
+            let center = Pos2::new(
+                slot.center().x + (galley.rect.center().x - ink.center().x),
+                reference_center.y + (galley.rect.center().y - ink.center().y),
+            );
+            Slot {
+                galley,
+                paint: center - reference_center,
+            }
+        })
+        .collect();
+
+    let reference =
+        Rect::from_center_size(reference_center, Vec2::new(right - left, zero_ink.height()));
+
+    (slots, reference)
+}
+
+/// Width `text` will occupy, measured in `0`-wide slots.
+fn slot_width(ctx: &egui::Context, family: &FontFamily, text: &str, size: f32) -> f32 {
+    let (_, reference) = layout_slots(ctx, family, text, size);
+    if reference.is_positive() {
+        reference.width()
+    } else {
+        measure_text(ctx, family, text, size).x
+    }
+}
+
+/// `text` with every digit replaced by a `0`, so the slot widths are fixed.
+fn slot_text(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_ascii_digit() { '0' } else { c })
+        .collect()
 }
 
 /// Paint one galley centred on `center`, rotated clockwise by `angle`.
@@ -772,7 +889,10 @@ fn draw_arc(
     painter.circle_stroke(
         center,
         radius,
-        Stroke::new(thickness, Color32::from_rgba_unmultiplied(60, 60, 60, track_alpha)),
+        Stroke::new(
+            thickness,
+            Color32::from_rgba_unmultiplied(60, 60, 60, track_alpha),
+        ),
     );
 
     let sweep = progress.clamp(0.0, 1.0) * std::f32::consts::TAU;
@@ -1096,7 +1216,10 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, frame: &Fr
     if frame.snapshot.lap_visible && !frame.snapshot.lap_text.is_empty() {
         let lap_size = (frame.font_size * 0.4).max(8.0);
         let lap_color = if config.theme == Theme::Chalkboard {
-            scale_alpha(Color32::from_rgba_unmultiplied(255, 255, 100, 170), alpha_scale)
+            scale_alpha(
+                Color32::from_rgba_unmultiplied(255, 255, 100, 170),
+                alpha_scale,
+            )
         } else {
             scale_alpha(Color32::from_rgb(255, 255, 0), alpha_scale)
         };
@@ -1117,12 +1240,7 @@ pub fn draw(ctx: &egui::Context, painter: &egui::Painter, rect: Rect, frame: &Fr
 }
 
 /// Measure `text` at `size` in the given family.
-pub fn measure_text(
-    ctx: &egui::Context,
-    family: &FontFamily,
-    text: &str,
-    size: f32,
-) -> Vec2 {
+pub fn measure_text(ctx: &egui::Context, family: &FontFamily, text: &str, size: f32) -> Vec2 {
     ctx.fonts(|fonts| {
         let job = egui::text::LayoutJob::simple_singleline(
             text.to_owned(),
@@ -1133,28 +1251,55 @@ pub fn measure_text(
     })
 }
 
-/// Window size needed to display `text` with `padding`.
+/// Window size needed to display `text` with `gap` between the digit ink and
+/// the panel edge, on all four sides.
 ///
-/// A little is added to the measured galley because its rect is the *layout*
-/// box: glyph ink (round bowls, descenders) can overshoot it slightly, and
-/// without the margin a zero-padding window clips the text.
+/// The digits are measured in `0`-width slots, exactly like [`draw_text`], so
+/// the box shrinks toward the middle only when a whole slot disappears — the
+/// gap never changes as the digits change.
 pub fn text_box_metrics(
     ctx: &egui::Context,
     family: &FontFamily,
     text: &str,
     size: f32,
-    padding: u32,
+    gap: f32,
     lap_visible: bool,
 ) -> Vec2 {
-    let measured = measure_text(ctx, family, text, size);
-    let pad = padding as f32 * 2.0;
-    let margin = (size * 0.12).max(2.0) * 2.0;
-    let width = measured.x + pad + margin;
-    let mut height = measured.y + pad + margin;
+    let (_, ink) = layout_slots(ctx, family, text, size);
+    let ink = if ink.is_positive() {
+        ink
+    } else {
+        Rect::from_min_size(Pos2::ZERO, measure_text(ctx, family, text, size))
+    };
+    let pad = gap.max(0.0);
+    let width = ink.width() + pad * 2.0;
+    let mut height = ink.height() + pad * 2.0;
     if lap_visible {
-        height += measured.y * 0.55;
+        height += ink.height() * 0.55;
     }
     Vec2::new(width.max(1.0), height.max(1.0))
+}
+
+/// Extra room the text decorations need beyond the digit ink: the outline ring
+/// and the drop shadow. Kept separate from the user's gap so the visible
+/// distance from the digits to the edge is exactly the padding setting.
+pub fn decoration_padding(config: &Config) -> f32 {
+    let mut extra = 0.0_f32;
+    if config.text_outline {
+        extra = extra.max(config.text_outline_thickness / 2.0);
+    }
+    if config.use_text_shadow {
+        extra = extra.max(3.0);
+    }
+    if config.theme == Theme::Chalkboard {
+        extra = extra.max(2.0);
+    }
+    extra
+}
+
+/// The full distance from the digit ink to the panel edge, on every side.
+pub fn edge_gap(config: &Config) -> f32 {
+    config.padding as f32 + decoration_padding(config)
 }
 
 /// Largest size (binary searched) whose text fits `available_width`.
@@ -1174,7 +1319,7 @@ pub fn fit_font_size(
     let mut best = min_size;
     while high - low > 0.5 {
         let mid = (low + high) / 2.0;
-        if measure_text(ctx, family, text, mid).x <= available_width {
+        if slot_width(ctx, family, text, mid) <= available_width {
             best = mid;
             low = mid;
         } else {
@@ -1253,14 +1398,110 @@ mod tests {
     #[test]
     fn rotation_preserves_distance_from_pivot() {
         let pivot = Pos2::new(5.0, -3.0);
-        let orientation = Orientation {
-            angle: 1.1,
-            pivot,
-        };
+        let orientation = Orientation { angle: 1.1, pivot };
         let point = Pos2::new(20.0, 12.0);
         let before = (point - pivot).length();
         let after = (orientation.point(point) - pivot).length();
         assert!((before - after).abs() < 1e-3);
+    }
+
+    #[test]
+    fn slot_text_replaces_every_digit() {
+        assert_eq!(slot_text("01:59.25"), "00:00.00");
+        assert_eq!(slot_text("+1:05"), "+0:00");
+        assert_eq!(slot_text(""), "");
+    }
+
+    #[test]
+    fn decoration_padding_tracks_outline_and_shadow() {
+        let plain = Config {
+            text_outline: false,
+            use_text_shadow: false,
+            theme: Theme::Default,
+            ..Default::default()
+        };
+        assert_eq!(decoration_padding(&plain), 0.0);
+
+        let outlined = Config {
+            text_outline: true,
+            text_outline_thickness: 4.0,
+            ..plain.clone()
+        };
+        assert_eq!(decoration_padding(&outlined), 2.0);
+
+        let shadowed = Config {
+            text_outline: false,
+            use_text_shadow: true,
+            ..plain
+        };
+        assert_eq!(decoration_padding(&shadowed), 3.0);
+    }
+
+    #[test]
+    fn edge_gap_is_padding_plus_decorations() {
+        let config = Config {
+            padding: 12,
+            text_outline: true,
+            text_outline_thickness: 6.0,
+            ..Default::default()
+        };
+        assert_eq!(edge_gap(&config), 15.0);
+    }
+
+    /// A context whose fonts have been loaded (measuring needs a real frame).
+    fn measured_context() -> egui::Context {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        ctx
+    }
+
+    #[test]
+    fn digits_measure_in_equal_slots() {
+        let ctx = measured_context();
+        let family = egui::FontFamily::Proportional;
+        // Same length, different digits: the box must be identical.
+        let a = text_box_metrics(&ctx, &family, "11:11", 40.0, 20.0, false);
+        let b = text_box_metrics(&ctx, &family, "00:00", 40.0, 20.0, false);
+        assert!((a.x - b.x).abs() < 0.01, "{a:?} vs {b:?}");
+        // Widths that differ only by a narrow digit's ink still match, because
+        // every digit occupies a `0` slot.
+        let c = text_box_metrics(&ctx, &family, "1:11", 40.0, 20.0, false);
+        let d = text_box_metrics(&ctx, &family, "0:00", 40.0, 20.0, false);
+        assert!((c.x - d.x).abs() < 0.01, "{c:?} vs {d:?}");
+    }
+
+    #[test]
+    fn dropping_a_leading_zero_removes_one_slot() {
+        let ctx = measured_context();
+        let family = egui::FontFamily::Proportional;
+        let with_zero = text_box_metrics(&ctx, &family, "00:42", 40.0, 20.0, false);
+        let without = text_box_metrics(&ctx, &family, "0:42", 40.0, 20.0, false);
+        // One digit slot is exactly the advance a zero adds.
+        let one = text_box_metrics(&ctx, &family, "0", 40.0, 20.0, false);
+        let two = text_box_metrics(&ctx, &family, "00", 40.0, 20.0, false);
+        let slot = two.x - one.x;
+        assert!(with_zero.x > without.x);
+        assert!(
+            (with_zero.x - without.x - slot).abs() < 0.5,
+            "{} vs {} (slot {slot})",
+            with_zero.x,
+            without.x
+        );
+    }
+
+    #[test]
+    fn box_width_is_ink_plus_twice_the_gap() {
+        let ctx = measured_context();
+        let family = egui::FontFamily::Proportional;
+        let gap = 18.0;
+        let box_size = text_box_metrics(&ctx, &family, "12:34", 40.0, gap, false);
+        let ink = slot_width(&ctx, &family, "12:34", 40.0);
+        assert!(
+            (box_size.x - (ink + gap * 2.0)).abs() < 0.5,
+            "{} vs {}",
+            box_size.x,
+            ink + gap * 2.0
+        );
     }
 
     #[test]

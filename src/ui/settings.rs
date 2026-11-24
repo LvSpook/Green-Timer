@@ -14,6 +14,7 @@ use crate::fonts;
 use crate::formatting::{format_input, parse_duration};
 use crate::hotkeys::{capture_next, Action};
 use crate::platform;
+use crate::render::edge_gap;
 use crate::updater;
 use crate::{APP_NAME, APP_VERSION};
 use eframe::egui;
@@ -409,7 +410,7 @@ impl SettingsState {
             ("Display style (Text, Arc, Bar, Fluid, Sprite)", "Appearance", Tab::Appearance),
             ("Show timer text", "Appearance", Tab::Appearance),
             ("Show background & background shape", "Appearance", Tab::Appearance),
-            ("Corner radius & padding", "Appearance", Tab::Appearance),
+            ("Edge distance & corner radius", "Appearance", Tab::Appearance),
             ("Border style & border thickness", "Appearance", Tab::Appearance),
             ("Native blur / acrylic", "Appearance", Tab::Appearance),
             ("Window opacity", "Appearance", Tab::Appearance),
@@ -881,7 +882,15 @@ impl SettingsState {
                     }
                 }
 
-                ui.label("Padding");
+                // The digits keep this distance from every edge, so the panel
+                // only changes size when a leading zero appears or disappears.
+                tip_label(
+                    ui,
+                    "Edge distance",
+                    "Space between the digits and the background edge, the same on all four sides. \
+                     Kept constant as the timer's digits change, so the panel only grows or shrinks \
+                     when a leading zero appears or disappears.",
+                );
                 ui.add(egui::Slider::new(&mut self.draft.padding, 0..=100).suffix(" px"));
                 ui.end_row();
 
@@ -1720,6 +1729,8 @@ impl SettingsState {
 
         let font_changed = app.config.font_family != config.font_family;
         let sprite_changed = app.config.sprite_path != config.sprite_path;
+        // The edge distance and the outline both change how big the box must be.
+        let shape_changed = edge_gap(&app.config) != edge_gap(&config);
 
         app.config = config;
         app.font_size = app.config.font_size as f32;
@@ -1735,6 +1746,9 @@ impl SettingsState {
             }
         }
         app.apply_appearance();
+        if shape_changed {
+            app.refresh_geometry();
+        }
         app.refresh();
     }
 

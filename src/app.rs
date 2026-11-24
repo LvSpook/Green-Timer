@@ -51,6 +51,9 @@ pub struct TimerApp {
     pre_mini_font_size: Option<u32>,
     /// Time of the previous frame, for frame-rate independent animation.
     last_frame: Instant,
+    /// Whether the first tick has produced text. Before that the geometry is
+    /// whatever the config says, and measuring empty text would collapse it.
+    measured_once: bool,
     /// When the last show/hide request was sent, so the OS-visibility poll does
     /// not read the old state before egui applies the change.
     visibility_requested: Option<Instant>,
@@ -68,7 +71,7 @@ impl TimerApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Capture this before `load`, which may write a settings file out.
         let first_run = config::is_first_run();
-        let config = config::load();
+        let mut config = config::load();
         fonts::install(&cc.egui_ctx, &config.font_family);
 
         let mut hotkeys = HotkeyManager::new();
@@ -84,7 +87,12 @@ impl TimerApp {
         if config.auto_start_on_launch && !matches!(config.mode, Mode::Clock | Mode::TargetTime) {
             engine.start(&config);
         }
-        let snapshot = Snapshot::default();
+        // Start from the real current text rather than the `00:00.00` placeholder,
+        // so the first frame sizes the box to what will actually be shown.
+        let snapshot = Snapshot {
+            text: engine.current_text(&config),
+            ..Snapshot::default()
+        };
         let display_color = render::target_color(&config, ColorRole::Normal);
 
         let update_rx = if config.auto_check_updates {
@@ -94,14 +102,13 @@ impl TimerApp {
         };
 
         // On a brand-new install there is nothing to discover the app with, so
-        // open Settings once. Every launch after that stays out of the way.
-        let mut settings = SettingsState::default();
+        // show a one-time tip pointing at the right-click menu. The settings
+        // file is written now as well: otherwise a user who never changes
+        // anything has no file and every launch would look like a first run.
+        let settings = SettingsState::default();
         if first_run {
-            log::info!("First run: opening the settings window");
-            settings.open(&config);
-            // Write the defaults out now. Otherwise closing the dialog with
-            // Cancel leaves no settings file and the next launch looks like a
-            // first run all over again.
+            log::info!("First run: showing the right-click tip");
+            config.show_first_run_tip = true;
             if let Err(err) = config::save(&config) {
                 log::warn!("Could not create the settings file: {err}");
             }
@@ -130,6 +137,7 @@ impl TimerApp {
             last_auto_profile: None,
             pre_mini_font_size: None,
             last_frame: Instant::now(),
+            measured_once: false,
             visibility_requested: None,
         }
     }
@@ -235,6 +243,12 @@ impl TimerApp {
         }
     }
 
+    /// Resize the box after a setting that changes its shape (edge distance,
+    /// outline, shadow, font). Vertical rotation is handled there too.
+    pub fn refresh_geometry(&mut self) {
+        self.resize_for_text();
+    }
+
     /// Push blur / click-through / opacity / topmost to the OS when they change.
     fn sync_platform(&mut self) {
         if self.hwnd == 0 {
@@ -280,9 +294,16 @@ impl TimerApp {
             &family,
             &text,
             self.font_size,
-            self.config.padding,
+            self.edge_gap(),
             self.snapshot.lap_visible,
         );
+        // Before the first tick the timer has no text yet. Measuring that
+        // would collapse the window to its minimum, so leave whatever geometry
+        // was saved from the last session alone until there is a snapshot.
+        if !self.measured_once && text.is_empty() {
+            return;
+        }
+        self.measured_once = true;
         let (mut width, mut height) = (size.x, size.y);
         if self.config.rotation.is_vertical() {
             std::mem::swap(&mut width, &mut height);
@@ -294,8 +315,31 @@ impl TimerApp {
         {
             self.config.width = width.round() as u32;
             self.config.height = height.round() as u32;
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, height)));
+            self.resize_window(&ctx, egui::vec2(width, height), true);
         }
+    }
+
+    /// Distance from the digit ink to the panel edge: the padding setting plus
+    /// whatever the outline and shadow need so nothing is clipped.
+    fn edge_gap(&self) -> f32 {
+        render::edge_gap(&self.config)
+    }
+
+    /// Resize the window. `recentre` keeps the centre fixed, so a leading zero
+    /// disappearing makes the box shrink toward the middle rather than jump to
+    /// one side; a grip drag keeps its anchor corner instead.
+    fn resize_window(&mut self, ctx: &egui::Context, size: egui::Vec2, recentre: bool) {
+        let outer = ctx.input(|i| i.viewport().outer_rect);
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        let Some(outer) = outer.filter(|_| recentre) else {
+            return;
+        };
+        // `InnerSize` excludes the window frame, so the change is split evenly
+        // around the old centre.
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+            outer.center().x - size.x / 2.0,
+            outer.center().y - size.y / 2.0,
+        )));
     }
 
     /// Pick the largest font that fits `available` and resize to match, the
@@ -310,7 +354,7 @@ impl TimerApp {
             self.snapshot.text.clone()
         };
         let family = fonts::timer_family(&ctx, &self.config.font_family);
-        let padding = self.config.padding as f32;
+        let padding = self.edge_gap();
         let text_width = (available - padding * 2.0).max(10.0);
         let size = render::fit_font_size(
             &ctx,
@@ -328,7 +372,7 @@ impl TimerApp {
             &family,
             &text,
             self.font_size,
-            self.config.padding,
+            self.edge_gap(),
             self.snapshot.lap_visible,
         );
         let (mut width, mut height) = (metrics.x, metrics.y);
@@ -339,7 +383,7 @@ impl TimerApp {
         let height = height.max(40.0);
         self.config.width = width.round() as u32;
         self.config.height = height.round() as u32;
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, height)));
+        self.resize_window(&ctx, egui::vec2(width, height), false);
     }
 
     fn tick(&mut self) {
@@ -653,14 +697,14 @@ impl eframe::App for TimerApp {
                 let rect = ui.max_rect();
                 let family = fonts::timer_family(ctx, &self.config.font_family);
                 let pointer_in = ctx.input(|i| i.pointer.hover_pos().is_some());
-                let alpha_scale = if self.config.hover_to_fade
-                    && pointer_in
-                    && !crate::menu::is_open()
-                {
-                    self.config.hover_fade_opacity
-                } else {
-                    1.0
-                };
+        let alpha_scale = if self.config.hover_to_fade
+            && pointer_in
+            && !crate::menu::is_open()
+        {
+            self.config.hover_fade_opacity
+        } else {
+            1.0
+        };
                 let frame = render::Frame {
                     config: &self.config,
                     snapshot: &self.snapshot,
@@ -676,6 +720,18 @@ impl eframe::App for TimerApp {
                 render::draw(ctx, &painter, rect, &frame);
 
                 self.overlay_interaction(ctx, ui, rect);
+
+                // Drawn last so its click is registered above the overlay's
+                // drag/click surface. Any click dismisses it, as does using
+                // the timer, so it never lingers.
+                if self.config.show_first_run_tip
+                    && !self.config.ghost_mode
+                    && (crate::hint::show(ui, rect, &self.config, alpha_scale)
+                        || ctx.input(|i| i.pointer.any_click()))
+                {
+                    self.config.show_first_run_tip = false;
+                    self.persist();
+                }
             });
 
         // Magnetic edge snapping when dragging near a screen edge.
@@ -724,7 +780,8 @@ impl eframe::App for TimerApp {
         let animated = self.engine.running()
             || self.config.mode == Mode::Clock
             || self.config.display_style == crate::config::DisplayStyle::Fluid
-            || self.fade_started.is_some();
+            || self.fade_started.is_some()
+            || self.config.show_first_run_tip;
         ctx.request_repaint_after(if animated { TICK } else { IDLE_TICK });
 
         if self.config.display_style == crate::config::DisplayStyle::Fluid
@@ -881,12 +938,16 @@ impl TimerApp {
             .then(|| response.interact_pointer_pos())
             .flatten();
         if let Some(pos) = clicked_at {
+            // Right-clicking the timer is exactly what the first-run tip asks
+            // for, so opening the menu counts as having read it.
+            self.config.show_first_run_tip = false;
             // `interact_pointer_pos` is viewport-local; the window wants
             // monitor coordinates.
             let origin = ctx
                 .input(|i| i.viewport().outer_rect.map(|r| r.min))
                 .unwrap_or(egui::Pos2::ZERO);
             crate::menu::open(origin + pos.to_vec2());
+            self.persist();
         }
     }
 

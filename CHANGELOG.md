@@ -10,7 +10,11 @@
 - **Log rotation keeps working.** The older log copy is now capped as well, so a long-running install cannot build up unbounded logs.
 
 ### First Run
-- **The settings window opens once on a fresh install**, so the hotkeys, modes and appearance are discoverable immediately. Later launches stay out of the way.
+- **A one-time tip on a fresh install** points at the right-click menu, which is the only way to reach Settings from the overlay. It disappears on the first click or right-click and never comes back. (It replaces the old behaviour of opening the Settings window automatically.)
+
+### Appearance
+- **The edge distance no longer jumps as the timer changes.** The panel now measures the digits in fixed-width slots that assume a `0`, so every digit sits the same distance from the background edge. When a leading zero disappears the panel shrinks toward the middle by exactly one slot instead of snapping to the digits.
+- **The distance is adjustable** on the Appearance tab as "Edge distance", and it applies equally to the left/right and top/bottom edges. The outline and shadow get their own extra room, so the visible gap stays exactly what you set.
 
 ### Under the Hood
 - Removed dead code, made the settings enums derive their defaults, and cleared every Clippy warning in the project.
