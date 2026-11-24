@@ -2,6 +2,13 @@
 
 ## What's New in v1.3.1 (WIP)
 
+### Global Hotkeys
+- **Custom hotkeys.** Add your own extra bindings on the Hotkeys tab: pick any action from a dropdown, press Record, and that key does it too. `+` adds another row and `−` removes one. The built-in keys keep working, and a key already in use is reported instead of silently failing.
+
+### About Tab
+- **Simpler About page.** Version, a one-line description, a button that opens the GitHub repository, and the update check. The system details, settings-file path and hardcoded hotkey list are gone.
+- **Pre-release updates are on the About page too**, right next to the update button, so the option sits with the thing it affects.
+
 ### Updates
 - **Opt in to pre-release updates.** A new setting under Behavior ("Offer work-in-progress builds") makes the updater look at pre-release tags such as `v1.3.2-wip`, which GitHub hides from the normal "latest release" endpoint. Off by default.
 - **The updater now downloads the installer, not the portable exe.** It used to take the first `.exe` it found, which was the bare `GreenTimer.exe`. It now prefers an `.msi`, then an Inno Setup `*_Setup_*.exe`, and never the portable binary.

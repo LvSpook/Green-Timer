@@ -155,6 +155,27 @@ mod imp {
         }
     }
 
+    /// Open a URL or file in the user's default browser/handler.
+    pub fn open_url(url: &str) {
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let operation = wide("open");
+        let target = wide(url);
+        let result = unsafe {
+            ShellExecuteW(
+                None,
+                PCWSTR(operation.as_ptr()),
+                PCWSTR(target.as_ptr()),
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if result.0 as isize <= 32 {
+            log::warn!("Could not open {url}");
+        }
+    }
+
     /// Play a WAV file asynchronously, or the OS alert when no file is usable.
     pub fn play_sound(path: &str) {
         if !path.is_empty() && std::path::Path::new(path).is_file() {
@@ -192,6 +213,7 @@ mod imp {
         (0.0, 0.0, 1920.0, 1080.0)
     }
     pub fn play_sound(_path: &str) {}
+    pub fn open_url(_url: &str) {}
 }
 
 pub const IS_WINDOWS: bool = cfg!(windows);
@@ -246,6 +268,11 @@ pub fn foreground_window() -> u64 {
 
 pub fn play_sound(path: &str) {
     imp::play_sound(path);
+}
+
+/// Open a URL in the default browser (no-op on non-Windows).
+pub fn open_url(url: &str) {
+    imp::open_url(url);
 }
 
 pub fn system_info() -> String {

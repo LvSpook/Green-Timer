@@ -7,9 +7,9 @@
 
 use crate::app::TimerApp;
 use crate::config::{
-    BorderStyle, Config, DisplayStyle, Hotkey, Mode, Rgb, Rotation, Theme, WindowShape,
+    BorderStyle, Config, CustomHotkey, DisplayStyle, Hotkey, Mode, Rgb, Rotation, Theme,
+    WindowShape,
 };
-use crate::engine::format_clock;
 use crate::fonts;
 use crate::formatting::{format_input, parse_duration};
 use crate::hotkeys::{capture_next, Action};
@@ -42,6 +42,10 @@ pub struct SettingsState {
     text: TextFields,
     /// Key capture receiver, when recording a hotkey.
     recording: Option<(Action, std::sync::mpsc::Receiver<(String, u32)>)>,
+    /// Index into `draft.hk_custom` while recording one of its rows.
+    recording_custom: Option<usize>,
+    /// Key capture receiver for the custom row in `recording_custom`.
+    custom_rx: Option<std::sync::mpsc::Receiver<(String, u32)>>,
     /// Pending file-dialog kind, consumed on the next frame.
     file_dialog: Option<FileDialogKind>,
     /// Pending snap request, consumed on the next frame.
@@ -104,6 +108,8 @@ impl Default for SettingsState {
             live: None,
             text: TextFields::default(),
             recording: None,
+            recording_custom: None,
+            custom_rx: None,
             file_dialog: None,
             pending_snap: None,
             confirm_defaults: false,
@@ -428,6 +434,7 @@ impl SettingsState {
             ("Saved Profiles & Per-App Auto-Switch", "Behavior", Tab::Behavior),
             ("Import / Export Settings (JSON)", "Behavior", Tab::Behavior),
             ("Global Hotkeys (Start/Pause, Reset, Lap, Ghost, Show/Hide, Mini-Mode)", "Hotkeys", Tab::Hotkeys),
+            ("Custom hotkeys (extra bindings for any action)", "Hotkeys", Tab::Hotkeys),
             ("Updates & About", "About", Tab::About),
             ("Update to pre-releases (work in progress builds)", "Behavior", Tab::Behavior),
         ];
@@ -1404,7 +1411,7 @@ impl SettingsState {
                 for action in Action::ALL {
                     let entry = self.draft.hotkey_mut(action);
                     ui.label(action.label());
-                    ui.monospace(format!("{}  (scan {})", entry.name, entry.code));
+                    ui.monospace(binding_text(entry));
 
                     let recording_this = self
                         .recording
@@ -1419,58 +1426,156 @@ impl SettingsState {
                     ui.end_row();
                 }
             });
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Custom hotkeys").strong());
+        ui.small(
+            "Add a second binding for any action, so more than one key can do the same thing.",
+        );
+        ui.add_space(6.0);
+
+        if self.draft.hk_custom.is_empty() {
+            ui.weak("No custom hotkeys yet.");
+        }
+
+        let mut remove: Option<usize> = None;
+        for index in 0..self.draft.hk_custom.len() {
+            let mut row = self.draft.hk_custom[index].clone();
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt(("custom_action", index))
+                    .selected_text(
+                        Action::from_id(&row.action)
+                            .map(|a| a.label())
+                            .unwrap_or("Choose an action\u{2026}"),
+                    )
+                    .show_ui(ui, |ui| {
+                        for action in Action::ALL {
+                            if ui
+                                .selectable_label(row.action == action.id(), action.label())
+                                .clicked()
+                            {
+                                row.action = action.id().to_string();
+                                changed = true;
+                            }
+                        }
+                    });
+
+                let recording_this = self.recording_custom == Some(index);
+                if recording_this {
+                    ui.label("Press a key\u{2026}");
+                    if ui.small_button("Cancel").clicked() {
+                        self.stop_recording();
+                    }
+                } else {
+                    ui.monospace(binding_text(&row.key));
+                    if ui.button("Record").clicked() {
+                        self.start_recording_custom(index);
+                    }
+                }
+
+                if ui
+                    .button("\u{2212}")
+                    .on_hover_text("Remove this custom hotkey")
+                    .clicked()
+                {
+                    remove = Some(index);
+                }
+            });
+            if changed {
+                self.draft.hk_custom[index] = row;
+            }
+        }
+
+        if let Some(index) = remove {
+            if self.recording_custom == Some(index) {
+                self.stop_recording();
+            } else if let Some(recording) = self.recording_custom {
+                // Removing an earlier row shifts the one being recorded down.
+                if index < recording {
+                    self.recording_custom = Some(recording - 1);
+                }
+            }
+            self.draft.hk_custom.remove(index);
+        }
+
+        if ui
+            .button("+  Add custom hotkey")
+            .on_hover_text("Adds another binding you can assign to any action")
+            .clicked()
+        {
+            let action = self
+                .draft
+                .hk_custom
+                .last()
+                .and_then(|row| Action::from_id(&row.action))
+                .unwrap_or(Action::Toggle);
+            self.draft.hk_custom.push(CustomHotkey {
+                action: action.id().to_string(),
+                key: Hotkey::unbound(),
+            });
+        }
     }
 
     fn about_tab(&mut self, ui: &mut egui::Ui) -> Outcome {
         let mut outcome = Outcome::None;
-        ui.heading(format!("{APP_NAME} {APP_VERSION}"));
+        ui.heading(APP_NAME);
+        ui.label(format!("Version {APP_VERSION}"));
+        ui.add_space(8.0);
         ui.label(
             "A lightweight, always-on-top overlay timer with count-up, countdown, \
              clock and pomodoro modes.",
         );
-        ui.add_space(6.0);
-        ui.label(format!("System: {}", platform::system_info()));
-        ui.label(format!(
-            "Settings file: {}",
-            crate::config::config_path().display()
-        ));
-        ui.label(format!("Repository: {}", updater::GITHUB_REPO));
-        ui.add_space(6.0);
-        ui.label("Hotkeys: F1 start/pause \u{00b7} F2 reset \u{00b7} F3 settings \u{00b7} F4 ghost mode \u{00b7} Space lap");
+        ui.add_space(8.0);
+        if ui
+            .button(format!("\u{2197}  {}", updater::GITHUB_REPO))
+            .on_hover_text("Open the project page in your browser")
+            .clicked()
+        {
+            platform::open_url(&format!("https://github.com/{}", updater::GITHUB_REPO));
+        }
 
-        ui.add_space(12.0);
+        ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Updates").strong());
+        ui.add_space(4.0);
+        ui.checkbox(
+            &mut self.draft.include_prereleases,
+            "Also offer pre-release (work in progress) builds",
+        )
+        .on_hover_text(
+            "Updates the app to pre-release tags such as v1.4.0-wip. \
+             These may be unstable and can change behaviour or settings.",
+        );
+        ui.add_space(6.0);
         if self.update_busy {
             ui.label("Checking for updates\u{2026}");
-        } else if ui.button("Check for updates now").clicked() {
+        } else if ui.button("Check for updates").clicked() {
             outcome = Outcome::CheckUpdates;
         }
 
         if let Some(info) = &self.pending_update {
             ui.add_space(8.0);
+            ui.label(format!(
+                "Version {} is available (you have {APP_VERSION}).",
+                info.latest
+            ));
             if info.prerelease {
-                ui.label(format!(
-                    "{} {} is available (you have {}).",
-                    APP_NAME, info.latest, APP_VERSION
-                ));
-                ui.small("Pre-release build — features and settings may change.");
-            } else {
-                ui.label(format!(
-                    "{} {} is available (you have {}).",
-                    APP_NAME, info.latest, APP_VERSION
-                ));
+                ui.small("Pre-release build \u{2014} features and settings may change.");
             }
             let label = if info.name.to_ascii_lowercase().ends_with(".msi") {
-                "Download and run installer (.msi)"
+                "Download and install (.msi)"
             } else {
-                "Download and run installer"
+                "Download and install"
             };
             if ui.button(label).clicked() {
                 outcome = Outcome::Install(info.clone());
             }
         }
 
-        ui.add_space(8.0);
-        ui.label(format!("Current time: {}", format_clock("%H:%M:%S")));
         outcome
     }
 
@@ -1713,17 +1818,61 @@ impl SettingsState {
 
     fn start_recording(&mut self, action: Action) {
         self.hotkey_message = None;
+        self.recording_custom = None;
         self.recording = Some((action, capture_next()));
+    }
+
+    /// Record a new key for the custom row at `index`.
+    fn start_recording_custom(&mut self, index: usize) {
+        self.hotkey_message = None;
+        self.recording = None;
+        crate::hotkeys::cancel_capture();
+        self.recording_custom = Some(index);
+        self.custom_rx = Some(capture_next());
     }
 
     /// Abandon a pending capture and resume normal hotkey dispatch.
     fn stop_recording(&mut self) {
-        if self.recording.take().is_some() {
+        let was_recording = self.recording.take().is_some();
+        let was_custom = self.recording_custom.take().is_some();
+        self.custom_rx = None;
+        if was_recording || was_custom {
             crate::hotkeys::cancel_capture();
         }
     }
 
     fn poll_recording(&mut self) {
+        if let Some(index) = self.recording_custom {
+            let Some(rx) = &self.custom_rx else {
+                self.recording_custom = None;
+                return;
+            };
+            match rx.try_recv() {
+                Ok((name, code)) => {
+                    let action = self
+                        .draft
+                        .hk_custom
+                        .get(index)
+                        .and_then(|row| Action::from_id(&row.action));
+                    if let Some(row) = self.draft.hk_custom.get_mut(index) {
+                        row.key = Hotkey::new(&name, code);
+                    }
+                    self.recording_custom = None;
+                    self.custom_rx = None;
+                    let label = action.map(|a| a.label()).unwrap_or("Custom");
+                    self.hotkey_message =
+                        Some(format!("{label} extra binding is now {name} (scan {code}). Save to apply."));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.recording_custom = None;
+                    self.custom_rx = None;
+                    self.hotkey_message = Some("Key capture failed.".into());
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            return;
+        }
+
         let Some((action, rx)) = &self.recording else {
             return;
         };
@@ -1890,6 +2039,14 @@ impl SettingsState {
         };
         self.open = false;
         crate::app::request_install(&info);
+    }
+}
+
+fn binding_text(entry: &Hotkey) -> String {
+    if entry.is_bound() {
+        format!("{}  (scan {})", entry.name, entry.code)
+    } else {
+        "Not set".to_string()
     }
 }
 

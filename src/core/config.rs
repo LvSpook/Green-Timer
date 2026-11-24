@@ -264,6 +264,38 @@ impl Hotkey {
     pub fn new(name: &str, code: u32) -> Self {
         Hotkey { name: name.to_string(), code }
     }
+
+    /// No key assigned yet.
+    pub fn unbound() -> Self {
+        Hotkey {
+            name: String::new(),
+            code: 0,
+        }
+    }
+
+    pub fn is_bound(&self) -> bool {
+        self.code != 0
+    }
+}
+
+/// A user-added extra binding for one of the built-in actions.
+///
+/// The action is stored by its stable id rather than an index, so reordering
+/// the action list can never silently rebind someone's keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomHotkey {
+    pub action: String,
+    pub key: Hotkey,
+}
+
+impl Default for CustomHotkey {
+    fn default() -> Self {
+        CustomHotkey {
+            action: "toggle".to_string(),
+            key: Hotkey::unbound(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -347,6 +379,8 @@ pub struct Config {
     pub edge_snapping: bool,
     pub hk_visibility: Hotkey,
     pub hk_mini_mode: Hotkey,
+    /// Extra user-added bindings, in addition to the seven built-in ones.
+    pub hk_custom: Vec<CustomHotkey>,
     pub context_menu: ContextMenuConfig,
     pub profiles: Vec<SavedProfile>,
     pub app_profile_rules: Vec<AppProfileRule>,
@@ -428,6 +462,7 @@ impl Default for Config {
             edge_snapping: true,
             hk_visibility: Hotkey::new("f11", 87),
             hk_mini_mode: Hotkey::new("f12", 88),
+            hk_custom: Vec::new(),
             context_menu: ContextMenuConfig::default(),
             profiles: Vec::new(),
             app_profile_rules: Vec::new(),
@@ -720,6 +755,22 @@ mod tests {
         assert_eq!(cfg.decimals, 3);
         assert_eq!(cfg.padding, 100);
         assert_eq!(cfg.countdown_start, 60.0);
+    }
+
+    #[test]
+    fn custom_hotkeys_are_optional_and_round_trip() {
+        // Old settings files have no custom bindings at all.
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(cfg.hk_custom.is_empty());
+
+        let mut cfg = Config::default();
+        cfg.hk_custom.push(CustomHotkey {
+            action: "lap".to_string(),
+            key: Hotkey::new("f9", 67),
+        });
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.hk_custom, cfg.hk_custom);
     }
 
     #[test]

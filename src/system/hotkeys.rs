@@ -23,6 +23,23 @@ pub enum Action {
 }
 
 impl Action {
+    /// Stable identifier used in the settings file for custom bindings.
+    pub fn id(self) -> &'static str {
+        match self {
+            Action::Toggle => "toggle",
+            Action::Reset => "reset",
+            Action::Settings => "settings",
+            Action::Lap => "lap",
+            Action::Ghost => "ghost",
+            Action::ToggleVisibility => "visibility",
+            Action::ToggleMiniMode => "mini_mode",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Action> {
+        Action::ALL.into_iter().find(|action| action.id() == id)
+    }
+
     #[cfg(test)]
     pub fn config_key(self) -> &'static str {
         match self {
@@ -62,6 +79,46 @@ impl Action {
 /// Scan codes the hook compares against, plus the actions they fire.
 type Bindings = Vec<(u32, Action)>;
 
+/// Turn a config into hook bindings, reporting conflicts.
+///
+/// Built-in bindings are added first so a custom row can never shadow the
+/// primary key for an action; unset (scan 0) rows are skipped entirely.
+fn build_bindings(config: &Config) -> (Bindings, Vec<(Action, String)>) {
+    let mut bindings: Bindings = Vec::new();
+    let mut failures: Vec<(Action, String)> = Vec::new();
+
+    let mut add = |code: u32, action: Action, name: &str, role: &str| {
+        if code == 0 {
+            return;
+        }
+        if bindings.iter().any(|(scan, _)| *scan == code) {
+            let role = if role.is_empty() {
+                String::new()
+            } else {
+                format!("{role} ")
+            };
+            failures.push((
+                action,
+                format!("{role}{name} is already used by another action"),
+            ));
+            return;
+        }
+        bindings.push((code, action));
+    };
+
+    for action in Action::ALL {
+        let entry = config.hotkey(action);
+        add(entry.code, action, &entry.name, "");
+    }
+    for extra in &config.hk_custom {
+        let Some(action) = Action::from_id(&extra.action) else {
+            continue;
+        };
+        add(extra.key.code, action, &extra.key.name, "extra binding");
+    }
+    (bindings, failures)
+}
+
 pub struct HotkeyManager {
     /// Bindings that could not be registered, for reporting in the UI.
     failures: Vec<(Action, String)>,
@@ -81,20 +138,8 @@ impl HotkeyManager {
 
     /// Replace every binding with the current configuration.
     pub fn rebind(&mut self, config: &Config) {
-        self.failures.clear();
-
-        let mut bindings: Bindings = Vec::new();
-        for action in Action::ALL {
-            let entry = config.hotkey(action);
-            if bindings.iter().any(|(scan, _)| *scan == entry.code) {
-                self.failures.push((
-                    action,
-                    format!("{} is already used by another action", entry.name),
-                ));
-                continue;
-            }
-            bindings.push((entry.code, action));
-        }
+        let (bindings, failures) = build_bindings(config);
+        self.failures = failures;
         hotkeys::set_bindings(bindings);
     }
 
@@ -362,5 +407,69 @@ mod tests {
     #[test]
     fn hotkey_display_names_are_kept_for_the_ui() {
         assert_eq!(crate::config::Hotkey::new("f1", 59).name, "f1");
+    }
+
+    #[test]
+    fn action_ids_round_trip_and_are_distinct() {
+        let mut ids: Vec<&str> = Action::ALL.iter().map(|a| a.id()).collect();
+        for action in Action::ALL {
+            assert_eq!(Action::from_id(action.id()), Some(action));
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), Action::ALL.len());
+        assert_eq!(Action::from_id("nope"), None);
+    }
+
+    #[test]
+    fn custom_bindings_add_extra_keys_for_an_action() {
+        let mut config = Config::default();
+        config.hk_custom.push(crate::config::CustomHotkey {
+            action: Action::Lap.id().to_string(),
+            key: crate::config::Hotkey::new("q", 16),
+        });
+        let (bindings, failures) = build_bindings(&config);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(bindings.contains(&(16, Action::Lap)));
+        // The built-in Space binding is still there.
+        assert!(bindings.contains(&(57, Action::Lap)));
+    }
+
+    #[test]
+    fn unset_custom_rows_are_ignored() {
+        let mut config = Config::default();
+        config.hk_custom.push(crate::config::CustomHotkey {
+            action: Action::Reset.id().to_string(),
+            key: crate::config::Hotkey::unbound(),
+        });
+        let (bindings, failures) = build_bindings(&config);
+        assert!(failures.is_empty());
+        assert_eq!(bindings.len(), Action::ALL.len());
+    }
+
+    #[test]
+    fn duplicate_keys_are_reported_not_dropped_silently() {
+        let mut config = Config::default();
+        config.hk_custom.push(crate::config::CustomHotkey {
+            action: Action::Lap.id().to_string(),
+            // Already used by Start / Pause.
+            key: crate::config::Hotkey::new("f1", 59),
+        });
+        let (bindings, failures) = build_bindings(&config);
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].1.contains("already used"), "{failures:?}");
+        assert_eq!(bindings.len(), Action::ALL.len());
+    }
+
+    #[test]
+    fn unknown_custom_action_is_skipped() {
+        let mut config = Config::default();
+        config.hk_custom.push(crate::config::CustomHotkey {
+            action: "does_not_exist".to_string(),
+            key: crate::config::Hotkey::new("q", 16),
+        });
+        let (bindings, failures) = build_bindings(&config);
+        assert!(failures.is_empty());
+        assert_eq!(bindings.len(), Action::ALL.len());
     }
 }
