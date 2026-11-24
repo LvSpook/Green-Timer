@@ -16,6 +16,13 @@
 - **The edge distance no longer jumps as the timer changes.** The panel now measures the digits in fixed-width slots that assume a `0`, so every digit sits the same distance from the background edge. When a leading zero disappears the panel shrinks toward the middle by exactly one slot instead of snapping to the digits.
 - **The distance is adjustable** on the Appearance tab as "Edge distance", and it applies equally to the left/right and top/bottom edges. The outline and shadow get their own extra room, so the visible gap stays exactly what you set.
 
+### Quick Adjust
+- **Adding time can exceed the starting countdown.** `+1m` (and `+10s`) now push the countdown past the value it was originally set to instead of stopping there. The timer keeps running from the new value.
+- **Subtracting stops at zero.** It no longer silently clamps; countdown modes rest at zero, count-up never goes below zero, and Pomodoro/Interval stay inside the current phase so a phase cannot be left overdue.
+- **Adjusting works while paused too,** so a timer can be set up before it starts.
+- **The window no longer shrinks when you use them.** The automatic text hug could collapse the box to its 80 px minimum whenever the display was short, such as a paused timer at `0`, and that tiny size was then saved as your own. Hugging now grows with longer text but never shrinks below the size you chose.
+- **Quick adjust from Settings no longer resizes the Settings window.** Window geometry changes are now pinned to the timer, so the dialog and the overlay can no longer steal each other's size.
+
 ### Notes
 - **One note, saved between launches.** Left-click the timer to open a small square note window underneath it, type, and the text is kept automatically. A click elsewhere, Escape, or the × closes it without losing anything.
 - **Double-click still pauses the timer.** A single click waits out the double-click window first, so a double-click never pops the note open as well.

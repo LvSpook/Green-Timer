@@ -97,7 +97,11 @@ pub struct TimerEngine<C: Clock = RealClock> {
     clock: C,
     running: bool,
     started_at: Instant,
-    accumulated: Duration,
+    /// Elapsed time banked while paused, in seconds. Signed because quick
+    /// adjust can push a countdown past its start value, which shows as more
+    /// time remaining than the timer was set to, and that means a negative
+    /// elapsed time.
+    accumulated: f64,
     phase: Phase,
     cycle_count: u32,
     interval_resting: bool,
@@ -122,7 +126,7 @@ impl<C: Clock> TimerEngine<C> {
             clock,
             running: false,
             started_at: now,
-            accumulated: Duration::ZERO,
+            accumulated: 0.0,
             phase: Phase::Work,
             cycle_count: 0,
             interval_resting: false,
@@ -162,19 +166,43 @@ impl<C: Clock> TimerEngine<C> {
     }
 
     /// Add or subtract seconds on the fly without stopping the timer.
+    ///
+    /// The adjustment lands on the elapsed clock, which is what every mode
+    /// counts from, so it behaves the same whether the timer is running or
+    /// paused. In the countdown modes adding time is *not* capped at the
+    /// configured start value: the elapsed clock simply goes negative, which
+    /// leaves more time on the display than the timer was originally set to.
+    /// Subtracting stops once it reaches zero rather than counting further
+    /// overdue, and count-up time never goes below zero.
     pub fn adjust_time(&mut self, config: &Config, delta_seconds: f64) {
-        if matches!(config.mode, Mode::Clock | Mode::TargetTime) {
+        if matches!(config.mode, Mode::Clock | Mode::TargetTime) || !delta_seconds.is_finite() {
             return;
         }
         let current = self.elapsed();
         // In countdown-style modes, +delta means MORE time remaining (less elapsed).
-        let signed = match config.mode {
-            Mode::Up => delta_seconds,
-            Mode::Down | Mode::Pomodoro | Mode::Interval => -delta_seconds,
-            Mode::Clock | Mode::TargetTime => 0.0,
+        let mut next = match config.mode {
+            Mode::Up => current + delta_seconds,
+            _ => current - delta_seconds,
         };
-        let next = (current + signed).max(0.0);
-        self.accumulated = Duration::from_secs_f64(next);
+        next = match config.mode {
+            // Count up never goes below zero.
+            Mode::Up => next.max(0.0),
+            // Countdowns stop at zero instead of counting further overdue, but
+            // adding is free to go past the starting value.
+            Mode::Down => next.min(config.countdown_start),
+            Mode::Pomodoro => next.min(self.phase_duration(config, self.phase)),
+            Mode::Interval => {
+                let phase = if self.interval_resting {
+                    config.interval_rest
+                } else {
+                    config.interval_work
+                }
+                .max(1.0);
+                next.min(phase)
+            }
+            Mode::Clock | Mode::TargetTime => return,
+        };
+        self.accumulated = next;
         self.started_at = self.clock.now();
         self.last_warn_sec = None;
     }
@@ -195,9 +223,9 @@ impl<C: Clock> TimerEngine<C> {
 
     pub fn elapsed(&self) -> f64 {
         if self.running {
-            (self.clock.now() - self.started_at).as_secs_f64() + self.accumulated.as_secs_f64()
+            (self.clock.now() - self.started_at).as_secs_f64() + self.accumulated
         } else {
-            self.accumulated.as_secs_f64()
+            self.accumulated
         }
     }
 
@@ -221,7 +249,7 @@ impl<C: Clock> TimerEngine<C> {
         if !self.running {
             return;
         }
-        self.accumulated = Duration::from_secs_f64(self.elapsed());
+        self.accumulated = self.elapsed();
         self.running = false;
     }
 
@@ -235,7 +263,7 @@ impl<C: Clock> TimerEngine<C> {
 
     pub fn reset(&mut self) {
         self.running = false;
-        self.accumulated = Duration::ZERO;
+        self.accumulated = 0.0;
         self.started_at = self.clock.now();
         self.phase = Phase::Work;
         self.cycle_count = 0;
@@ -352,7 +380,7 @@ impl<C: Clock> TimerEngine<C> {
                         self.phase = Phase::Work;
                     }
                     events.push(Event::PhaseChanged(self.phase));
-                    self.accumulated = Duration::ZERO;
+                    self.accumulated = 0.0;
                     self.started_at = now;
                     remaining = self.phase_duration(config, self.phase);
                     self.lap_text = format!("AUTO: {}", self.phase.label());
@@ -368,7 +396,7 @@ impl<C: Clock> TimerEngine<C> {
                 let mut remaining = config.countdown_start - self.elapsed();
                 if remaining <= 0.0 && config.auto_reset_on_zero {
                     events.push(Event::Cue);
-                    self.accumulated = Duration::ZERO;
+                    self.accumulated = 0.0;
                     self.started_at = now;
                     self.cue_fired = false;
                     self.last_warn_sec = None;
@@ -399,7 +427,7 @@ impl<C: Clock> TimerEngine<C> {
                 let mut remaining = phase_secs - self.elapsed();
                 if remaining <= 0.0 && self.running {
                     events.push(Event::Cue);
-                    self.accumulated = Duration::ZERO;
+                    self.accumulated = 0.0;
                     self.started_at = now;
                     self.last_warn_sec = None;
                     if !self.interval_resting && config.interval_rest > 0.0 {
@@ -990,6 +1018,137 @@ mod tests {
         h.engine.start(&h.config);
         h.advance(50.0);
         assert_eq!(h.tick().progress, 0.0);
+    }
+
+    #[test]
+    fn adjust_can_add_past_the_initial_countdown() {
+        let mut h = Harness::new(Config {
+            mode: Mode::Down,
+            countdown_start: 60.0,
+            decimals: 0,
+            ..Default::default()
+        });
+        h.engine.start(&h.config);
+        h.advance(10.0);
+        assert_eq!(h.tick().text, "00:50");
+
+        // Adding must not be capped at the configured start: 50 + 60 = 110.
+        h.engine.adjust_time(&h.config, 60.0);
+        assert_eq!(h.tick().text, "01:50");
+
+        // The timer keeps counting down from the new value.
+        h.advance(30.0);
+        assert_eq!(h.tick().text, "01:20");
+    }
+
+    #[test]
+    fn adjust_works_while_paused() {
+        let mut h = Harness::new(Config {
+            mode: Mode::Down,
+            countdown_start: 60.0,
+            decimals: 0,
+            ..Default::default()
+        });
+        h.engine.start(&h.config);
+        h.advance(10.0);
+        h.engine.pause();
+        h.engine.adjust_time(&h.config, 120.0);
+        assert_eq!(h.tick().text, "02:50");
+
+        // Resuming continues from the adjusted value.
+        h.engine.start(&h.config);
+        h.advance(20.0);
+        assert_eq!(h.tick().text, "02:30");
+    }
+
+    #[test]
+    fn adjust_down_stops_at_zero() {
+        let mut h = Harness::new(Config {
+            mode: Mode::Down,
+            countdown_start: 60.0,
+            use_threshold: false,
+            decimals: 0,
+            ..Default::default()
+        });
+        h.engine.start(&h.config);
+        h.advance(10.0);
+        // Subtracting more than what is left lands on zero, not overdue.
+        h.engine.adjust_time(&h.config, -600.0);
+        let snap = h.tick();
+        assert_eq!(snap.text, "00:00");
+        assert_eq!(snap.color_role, ColorRole::Normal);
+        h.advance(5.0);
+        assert_eq!(h.tick().text, "+00:05");
+    }
+
+    #[test]
+    fn adjust_count_up_never_goes_negative() {
+        let mut h = Harness::new(Config {
+            mode: Mode::Up,
+            decimals: 0,
+            ..Default::default()
+        });
+        h.engine.start(&h.config);
+        h.advance(10.0);
+        h.engine.adjust_time(&h.config, 60.0);
+        assert_eq!(h.tick().text, "01:10");
+        h.engine.adjust_time(&h.config, -600.0);
+        assert_eq!(h.tick().text, "00:00");
+    }
+
+    #[test]
+    fn adjust_is_ignored_in_clock_and_target_modes() {
+        for mode in [Mode::Clock, Mode::TargetTime] {
+            let mut h = Harness::new(Config {
+                mode,
+                ..Default::default()
+            });
+            let before = h.engine.elapsed();
+            h.engine.adjust_time(&h.config, 60.0);
+            assert_eq!(h.engine.elapsed(), before, "{mode:?} must not adjust");
+        }
+    }
+
+    #[test]
+    fn adjust_in_pomodoro_stays_within_the_phase() {
+        let mut h = Harness::new(Config {
+            mode: Mode::Pomodoro,
+            pomo_work: 1.0,
+            decimals: 0,
+            ..Default::default()
+        });
+        h.engine.start(&h.config);
+        h.advance(10.0);
+        // Adding a minute lands on the phase start and keeps going, so the
+        // phase shows more time left than its configured length.
+        h.engine.adjust_time(&h.config, 60.0);
+        assert_eq!(h.engine.phase(), Phase::Work);
+        assert_eq!(h.tick().text, "01:50");
+
+        // Subtracting past zero completes the phase instead of leaving it
+        // overdue, and the break begins.
+        h.engine.adjust_time(&h.config, -600.0);
+        assert_eq!(h.tick().text, "05:00");
+        assert_eq!(h.engine.phase(), Phase::Break);
+    }
+
+    #[test]
+    fn adjust_clears_a_pending_warning() {
+        let mut h = Harness::new(Config {
+            mode: Mode::Down,
+            countdown_start: 10.0,
+            warning_beeps: true,
+            decimals: 0,
+            ..Default::default()
+        });
+        h.engine.start(&h.config);
+        h.advance(7.0);
+        // 3 seconds left fires the 3s warning once.
+        assert!(h.tick().events.contains(&Event::Cue));
+        // Adding time moves away from the warning window, so it can fire again.
+        h.engine.adjust_time(&h.config, 60.0);
+        assert!(!h.tick().events.contains(&Event::Cue));
+        assert_eq!(h.tick().text, "01:03");
     }
 
     #[test]

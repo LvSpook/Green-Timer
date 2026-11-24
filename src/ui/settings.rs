@@ -2059,7 +2059,10 @@ impl SettingsState {
         self.original.pos_x = pos_x;
         self.original.pos_y = pos_y;
         if let Some(ctx) = crate::app::current_context() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
+            ctx.send_viewport_cmd_to(
+                egui::ViewportId::ROOT,
+                egui::ViewportCommand::OuterPosition(egui::pos2(x, y)),
+            );
         }
         app.persist();
     }

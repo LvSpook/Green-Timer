@@ -61,6 +61,10 @@ pub struct TimerApp {
     /// Whether the first tick has produced text. Before that the geometry is
     /// whatever the config says, and measuring empty text would collapse it.
     measured_once: bool,
+    /// The size the user last chose, directly or through Settings. The automatic
+    /// text hug may shrink back toward this but never below it, so a short time
+    /// such as `0` cannot collapse the window.
+    hug_floor: egui::Vec2,
     /// When the last show/hide request was sent, so the OS-visibility poll does
     /// not read the old state before egui applies the change.
     visibility_requested: Option<Instant>,
@@ -124,6 +128,7 @@ impl TimerApp {
         TimerApp {
             show_window: !config.start_minimized || !tray.is_available(),
             font_size: config.font_size as f32,
+            hug_floor: egui::vec2(config.width as f32, config.height as f32),
             config,
             engine,
             snapshot,
@@ -225,7 +230,9 @@ impl TimerApp {
         let Some(ctx) = self::current_context() else {
             return;
         };
-        let (outer, inner) = ctx.input(|i| {
+        // The Settings window is a child viewport, and egui's input calls read
+        // whichever viewport is current, so this must name the overlay.
+        let (outer, inner) = root_input(&ctx, |i| {
             let viewport = i.viewport();
             (viewport.outer_rect, viewport.inner_rect)
         });
@@ -287,8 +294,28 @@ impl TimerApp {
         self.applied = desired;
     }
 
-    /// Size the window to the current text.
+    /// Size the window to the current text, shrinking or growing as needed.
+    ///
+    /// Used when the user asked for a new size, with a grip or through a
+    /// setting, so it also records that size as the new floor.
     pub fn resize_for_text(&mut self) {
+        self.fit_text_box(false);
+        self.hug_floor = egui::vec2(self.config.width as f32, self.config.height as f32);
+    }
+
+    /// Hug the text while the timer runs, shrinking back toward the size the
+    /// user chose but never below it.
+    ///
+    /// Shrinking without a floor is what made the window collapse: a timer
+    /// showing `0` (paused, just reset, or merely launched) measures as a single
+    /// character, so the box fell to its 80 px minimum and that tiny size was
+    /// then saved over the user's own. The floor keeps the box at least as large
+    /// as the size that was actually picked.
+    fn hug_text(&mut self) {
+        self.fit_text_box(true);
+    }
+
+    fn fit_text_box(&mut self, respect_floor: bool) {
         let Some(ctx) = CURRENT_CTX.with(|cell| cell.borrow().clone()) else {
             return;
         };
@@ -298,7 +325,7 @@ impl TimerApp {
             self.snapshot.text.clone()
         };
         let family = fonts::timer_family(&ctx, &self.config.font_family);
-        let size = render::text_box_metrics(
+        let measured = render::text_box_metrics(
             &ctx,
             &family,
             &text,
@@ -313,12 +340,12 @@ impl TimerApp {
             return;
         }
         self.measured_once = true;
-        let (mut width, mut height) = (size.x, size.y);
-        if self.config.rotation.is_vertical() {
-            std::mem::swap(&mut width, &mut height);
-        }
-        let width = width.max(80.0);
-        let height = height.max(40.0);
+        let floor = respect_floor.then_some(self.hug_floor);
+        let (width, height) = sized_box(
+            measured,
+            floor,
+            self.config.rotation.is_vertical(),
+        );
         if (width - self.config.width as f32).abs() > 1.0
             || (height - self.config.height as f32).abs() > 1.0
         {
@@ -338,17 +365,23 @@ impl TimerApp {
     /// disappearing makes the box shrink toward the middle rather than jump to
     /// one side; a grip drag keeps its anchor corner instead.
     fn resize_window(&mut self, ctx: &egui::Context, size: egui::Vec2, recentre: bool) {
-        let outer = ctx.input(|i| i.viewport().outer_rect);
-        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        // The Settings window draws in a child viewport, and there the current
+        // viewport is *that* window: an unpinned command would shrink the
+        // dialog instead of the overlay. Name the overlay explicitly.
+        let outer = root_input(ctx, |i| i.viewport().outer_rect);
+        ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::InnerSize(size));
         let Some(outer) = outer.filter(|_| recentre) else {
             return;
         };
         // `InnerSize` excludes the window frame, so the change is split evenly
         // around the old centre.
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-            outer.center().x - size.x / 2.0,
-            outer.center().y - size.y / 2.0,
-        )));
+        ctx.send_viewport_cmd_to(
+            egui::ViewportId::ROOT,
+            egui::ViewportCommand::OuterPosition(egui::pos2(
+                outer.center().x - size.x / 2.0,
+                outer.center().y - size.y / 2.0,
+            )),
+        );
     }
 
     /// Pick the largest font that fits `available` and resize to match, the
@@ -392,6 +425,9 @@ impl TimerApp {
         let height = height.max(40.0);
         self.config.width = width.round() as u32;
         self.config.height = height.round() as u32;
+        // The grip is the user choosing a size, so the text hug must not shrink
+        // below it later.
+        self.hug_floor = egui::vec2(width, height);
         self.resize_window(&ctx, egui::vec2(width, height), false);
     }
 
@@ -436,15 +472,21 @@ impl TimerApp {
             self.fade_from = self.display_color;
             self.fade_started = Some(Instant::now());
         }
-        if snapshot.text_length_changed
+        // Adopt the new snapshot before any resize: measuring the previous
+        // frame's text would size the box for the digits that have just gone,
+        // leaving it a step stale (and stuck at one character after the timer
+        // hit zero, which is what made the window look tiny).
+        self.snapshot = snapshot;
+
+        if self.snapshot.text_length_changed
             && self.config.display_style == crate::config::DisplayStyle::Text
             && !self.config.window_locked
         {
             // Like the original, the window hugs the text as its length changes.
-            // Other styles own their own geometry, so they are left alone.
-            self.resize_for_text();
+            // Other styles own their own geometry, so they are left alone. The
+            // hug grows for longer text but never shrinks below the chosen size.
+            self.hug_text();
         }
-        self.snapshot = snapshot;
     }
 
     fn current_color(&mut self) -> egui::Color32 {
@@ -646,6 +688,15 @@ thread_local! {
 /// The current egui context, if the app has started a frame.
 pub fn current_context() -> Option<egui::Context> {
     CURRENT_CTX.with(|cell| cell.borrow().clone())
+}
+
+/// Read input from the overlay window.
+///
+/// `Context::input` reads whichever viewport is currently drawing. Settings and
+/// the note are child viewports, so code that runs while they are open must use
+/// this to see the overlay's geometry instead of theirs.
+pub fn root_input<R>(ctx: &egui::Context, reader: impl FnOnce(&egui::InputState) -> R) -> R {
+    ctx.input_for(egui::ViewportId::ROOT, reader)
 }
 
 thread_local! {
@@ -1196,9 +1247,27 @@ fn load_icon(config: &Config) -> egui::IconData {
     crate::render::themed_window_icon(config)
 }
 
+/// The window size for measured `text` ink.
+///
+/// `floor` is the size the user last chose, when the caller wants the automatic
+/// hug kept at or above it. The result is never below the usable minimum.
+fn sized_box(measured: egui::Vec2, floor: Option<egui::Vec2>, vertical: bool) -> (f32, f32) {
+    let (mut width, mut height) = (measured.x, measured.y);
+    if vertical {
+        std::mem::swap(&mut width, &mut height);
+    }
+    if let Some(floor) = floor {
+        // The floor is stored in window orientation, so it is applied after the
+        // rotation swap.
+        width = width.max(floor.x);
+        height = height.max(floor.y);
+    }
+    (width.max(80.0), height.max(40.0))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_on_screen;
+    use super::{is_on_screen, sized_box};
 
     const SCREEN: (f32, f32, f32, f32) = (0.0, 0.0, 1920.0, 1080.0);
 
@@ -1228,5 +1297,146 @@ mod tests {
         // A screen to the left of the primary has negative coordinates.
         let multi: (f32, f32, f32, f32) = (-1920.0, 0.0, 1920.0, 1080.0);
         assert!(is_on_screen(-500.0, 100.0, 300.0, 120.0, multi));
+    }
+
+    #[test]
+    fn automatic_hug_never_shrinks_below_the_chosen_size() {
+        // The user's own window is 125x53. A paused or zeroed timer measures as
+        // one character (about 27x50 plus the gap). Hugging that used to drop
+        // the box to the 80 px minimum and save it, which is the "tiny window".
+        let chosen = egui::vec2(125.0, 53.0);
+        let one_char = egui::vec2(27.0, 50.0);
+        assert_eq!(sized_box(one_char, Some(chosen), false), (125.0, 53.0));
+    }
+
+    #[test]
+    fn automatic_hug_still_grows_for_longer_text() {
+        let chosen = egui::vec2(125.0, 53.0);
+        let longer = egui::vec2(240.0, 53.0);
+        assert_eq!(sized_box(longer, Some(chosen), false), (240.0, 53.0));
+    }
+
+    #[test]
+    fn explicit_resize_may_shrink_to_the_measurement() {
+        // Without a floor (a grip or Settings change), the measured size wins.
+        let tiny = egui::vec2(27.0, 50.0);
+        assert_eq!(sized_box(tiny, None, false), (80.0, 50.0));
+    }
+
+    #[test]
+    fn floor_applies_after_rotation() {
+        // Vertical windows swap the axes, and the floor is already in window
+        // orientation, so it must be compared against the swapped size.
+        let chosen = egui::vec2(125.0, 53.0);
+        let measured = egui::vec2(200.0, 60.0);
+        assert_eq!(sized_box(measured, Some(chosen), true), (125.0, 200.0));
+    }
+
+    /// Commands a viewport was asked for during one frame, keyed by viewport.
+    fn commands_after(
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        f: impl FnOnce(&egui::Context),
+    ) -> egui::ViewportIdMap<Vec<egui::ViewportCommand>> {
+        let mut f = Some(f);
+        let output = ctx.run(input, |ctx| {
+            if let Some(f) = f.take() {
+                f(ctx);
+            }
+        });
+        output
+            .viewport_output
+            .into_iter()
+            .map(|(id, viewport)| (id, viewport.commands))
+            .collect()
+    }
+
+    fn inner_size(commands: &[egui::ViewportCommand]) -> Option<egui::Vec2> {
+        commands.iter().find_map(|command| match command {
+            egui::ViewportCommand::InnerSize(size) => Some(*size),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn geometry_from_settings_targets_the_overlay_not_the_dialog() {
+        // The quick-adjust buttons live in Settings, which draws as its own
+        // viewport. There, a plain `send_viewport_cmd` resizes *Settings*: that
+        // is what made the timer look like it had shrunk, and moved the dialog.
+        let child = egui::ViewportId::from_hash_of("settings");
+        let size = egui::vec2(321.0, 89.0);
+
+        let mut child_input = egui::RawInput {
+            viewport_id: child,
+            ..Default::default()
+        };
+        child_input.viewports.insert(child, egui::ViewportInfo::default());
+
+        // Unpinned (the old behaviour): the command follows the current window.
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        let out = commands_after(&ctx, child_input.clone(), |ctx| {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        });
+        assert_eq!(
+            inner_size(out.get(&child).map(Vec::as_slice).unwrap_or(&[])),
+            Some(size),
+            "an unpinned command from Settings hits Settings"
+        );
+
+        // Pinned to ROOT (what the app now does): the overlay is targeted.
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |_| {});
+        let out = commands_after(&ctx, child_input, |ctx| {
+            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::InnerSize(size));
+        });
+        assert_eq!(
+            inner_size(out.get(&egui::ViewportId::ROOT).map(Vec::as_slice).unwrap_or(&[])),
+            Some(size),
+            "pinning to ROOT resizes the overlay"
+        );
+        assert_ne!(
+            inner_size(out.get(&child).map(Vec::as_slice).unwrap_or(&[])),
+            Some(size),
+            "Settings must not be resized"
+        );
+    }
+
+    #[test]
+    fn root_input_reads_the_overlay_geometry_from_settings() {
+        // Saving from Settings used to record the *dialog's* size into the
+        // timer's config, which also shrank the overlay on the next launch.
+        let child = egui::ViewportId::from_hash_of("settings");
+        let ctx = egui::Context::default();
+
+        let mut root_input = egui::RawInput::default();
+        root_input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::new(1200.0, 300.0),
+            egui::vec2(125.0, 53.0),
+        ));
+        let _ = ctx.run(root_input, |_| {});
+
+        let mut child_input = egui::RawInput {
+            viewport_id: child,
+            ..Default::default()
+        };
+        child_input.viewports.insert(child, egui::ViewportInfo::default());
+        child_input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::new(200.0, 100.0),
+            egui::vec2(560.0, 720.0),
+        ));
+
+        let mut current = egui::Rect::NOTHING;
+        let mut root_seen = egui::Rect::NOTHING;
+        let _ = ctx.run(child_input, |ctx| {
+            // Both reads happen *inside* the child's frame, which is exactly
+            // when the settings quick-adjust buttons run.
+            current = ctx.input(|i| i.screen_rect());
+            root_seen = super::root_input(ctx, |i| i.screen_rect());
+        });
+        // The child sees its own size; `root_input` still sees the overlay's.
+        assert_eq!(current.width(), 560.0);
+        assert_eq!(root_seen.width(), 125.0);
+        assert_eq!(root_seen.height(), 53.0);
     }
 }
