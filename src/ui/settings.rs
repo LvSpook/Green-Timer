@@ -55,7 +55,7 @@ pub struct SettingsState {
     /// Update found by the about tab.
     pending_update: Option<updater::UpdateInfo>,
     /// Installer URL the user asked to download.
-    install_requested: Option<String>,
+    install_requested: Option<updater::UpdateInfo>,
     /// Draft has been initialised from the live config.
     initialised: bool,
     /// Result of the delayed foreground-window capture.
@@ -130,7 +130,7 @@ enum Outcome {
     RestoreDefaults,
     Quit,
     CheckUpdates,
-    Install(String),
+    Install(updater::UpdateInfo),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -360,9 +360,9 @@ impl SettingsState {
             Outcome::CheckUpdates => {
                 self.update_busy = true;
                 app.update_available = None;
-                app.update_rx = Some(updater::spawn_check(APP_VERSION.to_string()));
+                app.update_rx = Some(updater::spawn_check(APP_VERSION.to_string(), self.draft.include_prereleases));
             }
-            Outcome::Install(url) => self.install_requested = Some(url),
+            Outcome::Install(info) => self.install_requested = Some(info),
         }
     }
 
@@ -429,6 +429,7 @@ impl SettingsState {
             ("Import / Export Settings (JSON)", "Behavior", Tab::Behavior),
             ("Global Hotkeys (Start/Pause, Reset, Lap, Ghost, Show/Hide, Mini-Mode)", "Hotkeys", Tab::Hotkeys),
             ("Updates & About", "About", Tab::About),
+            ("Update to pre-releases (work in progress builds)", "Behavior", Tab::Behavior),
         ];
 
         ui.label(egui::RichText::new(format!("Matches for \"{}\":", self.search_query.trim())).strong());
@@ -1205,9 +1206,23 @@ impl SettingsState {
                     {
                         self.update_busy = true;
                         app.update_available = None;
-                        app.update_rx = Some(updater::spawn_check(APP_VERSION.to_string()));
+                        app.update_rx = Some(updater::spawn_check(
+                            APP_VERSION.to_string(),
+                            self.draft.include_prereleases,
+                        ));
                     }
                 });
+                ui.end_row();
+
+                ui.label("Pre-releases");
+                ui.checkbox(
+                    &mut self.draft.include_prereleases,
+                    "Offer work-in-progress builds",
+                )
+                .on_hover_text(
+                    "Also update to pre-release builds (tags like -wip). \
+                     These may be unstable and can change behaviour or settings.",
+                );
                 ui.end_row();
             });
 
@@ -1432,12 +1447,25 @@ impl SettingsState {
 
         if let Some(info) = &self.pending_update {
             ui.add_space(8.0);
-            ui.label(format!(
-                "{} {} is available (you have {}).",
-                APP_NAME, info.latest, APP_VERSION
-            ));
-            if ui.button("Download and run installer").clicked() {
-                outcome = Outcome::Install(info.url.clone());
+            if info.prerelease {
+                ui.label(format!(
+                    "{} {} is available (you have {}).",
+                    APP_NAME, info.latest, APP_VERSION
+                ));
+                ui.small("Pre-release build — features and settings may change.");
+            } else {
+                ui.label(format!(
+                    "{} {} is available (you have {}).",
+                    APP_NAME, info.latest, APP_VERSION
+                ));
+            }
+            let label = if info.name.to_ascii_lowercase().ends_with(".msi") {
+                "Download and run installer (.msi)"
+            } else {
+                "Download and run installer"
+            };
+            if ui.button(label).clicked() {
+                outcome = Outcome::Install(info.clone());
             }
         }
 
@@ -1857,11 +1885,11 @@ impl SettingsState {
     /// Hand an installer download to the app, which runs it in the background
     /// and exits once it starts.
     fn poll_install(&mut self) {
-        let Some(url) = self.install_requested.take() else {
+        let Some(info) = self.install_requested.take() else {
             return;
         };
         self.open = false;
-        crate::app::request_install(&url);
+        crate::app::request_install(&info);
     }
 }
 

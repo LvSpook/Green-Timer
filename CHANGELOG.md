@@ -2,6 +2,11 @@
 
 ## What's New in v1.3.1 (WIP)
 
+### Updates
+- **Opt in to pre-release updates.** A new setting under Behavior ("Offer work-in-progress builds") makes the updater look at pre-release tags such as `v1.3.2-wip`, which GitHub hides from the normal "latest release" endpoint. Off by default.
+- **The updater now downloads the installer, not the portable exe.** It used to take the first `.exe` it found, which was the bare `GreenTimer.exe`. It now prefers an `.msi`, then an Inno Setup `*_Setup_*.exe`, and never the portable binary.
+- Update prompts and downloads keep the correct file extension, so an `.msi` opens with Windows Installer instead of being run as a program.
+
 ### Installer & Packaging
 - **Standalone exe now has its own icon.** The icon and version details are compiled into `GreenTimer.exe`, so a single-file download shows the Green Timer icon in Explorer, on the desktop, and in Alt-Tab instead of the generic executable icon. It no longer needs the separate `.ico` beside it.
 

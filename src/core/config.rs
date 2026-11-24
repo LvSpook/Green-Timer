@@ -324,6 +324,8 @@ pub struct Config {
     #[serde(deserialize_with = "lenient")]
     pub rotation: Rotation,
     pub auto_check_updates: bool,
+    /// Also offer pre-release (work in progress) builds when checking updates.
+    pub include_prereleases: bool,
     pub reduce_motion: bool,
     pub start_minimized: bool,
     pub hide_leading_zeros: bool,
@@ -404,6 +406,7 @@ impl Default for Config {
             bar_text_color: Rgb(0xFF, 0xFF, 0xFF),
             rotation: Rotation::None,
             auto_check_updates: true,
+            include_prereleases: false,
             reduce_motion: false,
             start_minimized: false,
             hide_leading_zeros: false,
@@ -685,6 +688,9 @@ mod tests {
         assert_eq!(cfg.normal_color, Rgb(0x12, 0x34, 0x56));
         assert_eq!(cfg.font_family, "Segoe UI");
         assert!(!cfg.reduce_motion);
+        // Newer than the file: pre-release updates default off.
+        assert!(!cfg.include_prereleases);
+        assert!(cfg.auto_check_updates);
     }
 
     #[test]

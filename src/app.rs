@@ -79,7 +79,7 @@ impl TimerApp {
         let display_color = render::target_color(&config, ColorRole::Normal);
 
         let update_rx = if config.auto_check_updates {
-            Some(updater::spawn_check(APP_VERSION.to_string()))
+            Some(updater::spawn_check(APP_VERSION.to_string(), config.include_prereleases))
         } else {
             None
         };
@@ -473,12 +473,18 @@ impl TimerApp {
                 if platform::confirm(
                     "Update Available",
                     &format!(
-                        "{APP_NAME} {} is available (you have {}).\n\n\
+                        "{APP_NAME} {} is available (you have {}).{}\n\n\
                          Download and run the installer now?",
-                        info.latest, APP_VERSION
+                        info.latest,
+                        APP_VERSION,
+                        if info.prerelease {
+                            "\n\nThis is a pre-release (work in progress) build."
+                        } else {
+                            ""
+                        }
                     ),
                 ) {
-                    self.install_update(&info.url);
+                    self.install_update(&info);
                 } else {
                     // Declined: keep it available in the About tab.
                     self.update_available = Some(info);
@@ -493,13 +499,13 @@ impl TimerApp {
     ///
     /// Downloading runs on a background thread; the result is handed straight
     /// to the event loop so the overlay never blocks on the network.
-    pub fn install_update(&mut self, url: &str) {
+    pub fn install_update(&mut self, info: &updater::UpdateInfo) {
         self.persist();
-        log::info!("Downloading update from {url}");
-        let url = url.to_string();
+        log::info!("Downloading update {} from {}", info.latest, info.url);
+        let info = info.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(updater::download_installer(&url));
+            let _ = tx.send(updater::download_installer(&info));
         });
         self.install_rx = Some(rx);
     }
@@ -555,15 +561,15 @@ pub fn current_context() -> Option<egui::Context> {
 thread_local! {
     /// Installer URL requested from the settings window, picked up by the
     /// app on its next frame so the download does not block the dialog.
-    static PENDING_INSTALL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static PENDING_INSTALL: std::cell::RefCell<Option<updater::UpdateInfo>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Ask the app to download and run an installer for `url`.
-pub fn request_install(url: &str) {
-    PENDING_INSTALL.with(|cell| *cell.borrow_mut() = Some(url.to_string()));
+/// Ask the app to download and run the installer described by `info`.
+pub fn request_install(info: &updater::UpdateInfo) {
+    PENDING_INSTALL.with(|cell| *cell.borrow_mut() = Some(info.clone()));
 }
 
-fn take_pending_install() -> Option<String> {
+fn take_pending_install() -> Option<updater::UpdateInfo> {
     PENDING_INSTALL.with(|cell| cell.borrow_mut().take())
 }
 
@@ -585,8 +591,8 @@ impl eframe::App for TimerApp {
 
         self.poll_updates();
         self.poll_install();
-        if let Some(url) = take_pending_install() {
-            self.install_update(&url);
+        if let Some(info) = take_pending_install() {
+            self.install_update(&info);
         }
         self.handle_input(ctx);
         self.tick();
