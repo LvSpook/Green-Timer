@@ -84,7 +84,7 @@ Grab the installer from the [latest release](https://github.com/LvSpook/Green-Ti
 | File | What it is |
 | --- | --- |
 | `GreenTimer_Setup_v<version>.exe` | Windows installer (per-user, no admin required) |
-| `GreenTimer.exe` | Standalone portable executable |
+| `GreenTimer.exe` | Standalone portable executable (icon included, nothing else needed) |
 
 > Pre-release builds are **work in progress** and may be rough around the edges.
 
@@ -152,6 +152,7 @@ comparison.
 ## 🗂 Project layout
 
 ```
+build.rs              Embeds the window icon and version info into the exe
 src/
   main.rs               Entry point and shared constants
   app.rs                Overlay window, event loop, hotkey/tray dispatch

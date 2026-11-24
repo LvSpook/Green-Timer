@@ -28,6 +28,7 @@
 - **Hover Tooltips**: Short descriptions appear after hovering over non-self-explanatory option labels.
 
 ### Project & Fixes
+- **Standalone exe now has its own icon.** The icon and version details are compiled into `GreenTimer.exe`, so a single-file download looks right in Explorer, on the desktop, and in Alt-Tab instead of showing the generic executable icon. It also no longer needs the separate `.ico` beside it.
 - Fixed Settings window taskbar icon appearing as a black square.
 - Updated system tray icon & menu with live theming and new quick toggles.
 - Organized Rust source into `src/core/`, `src/ui/`, and `src/system/`.

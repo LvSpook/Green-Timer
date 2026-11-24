@@ -886,7 +886,9 @@ pub fn run() -> eframe::Result<()> {
             .with_resizable(false)
             .with_taskbar(false)
             .with_title(APP_NAME)
-            .with_icon(load_icon()),
+            // Prefer the themed vector icon so the window keeps matching the
+            // selected theme, and fall back to the bundled .ico file.
+            .with_icon(load_icon(&config)),
         renderer: eframe::Renderer::Glow,
         vsync: true,
         ..Default::default()
@@ -906,25 +908,25 @@ fn default_position(config: &Config) -> (f32, f32) {
     ((left + screen_w - width - 24.0).max(left), top + 24.0)
 }
 
-fn load_icon() -> egui::IconData {
+fn load_icon(config: &Config) -> egui::IconData {
+    // The standalone release download is often just the .exe with no .ico next
+    // to it, so never rely on that file existing: draw the themed icon first,
+    // then try the bundled .ico, then an empty placeholder.
     let path = crate::resource_path(ICON_FILENAME);
-    match image::open(&path) {
-        Ok(image) => {
-            let image = image.to_rgba8();
-            let (width, height) = image.dimensions();
-            egui::IconData {
-                rgba: image.into_raw(),
-                width,
-                height,
+    if path.exists() {
+        match image::open(&path) {
+            Ok(image) => {
+                let image = image.to_rgba8();
+                let (width, height) = image.dimensions();
+                return egui::IconData {
+                    rgba: image.into_raw(),
+                    width,
+                    height,
+                };
             }
-        }
-        Err(err) => {
-            log::warn!("Could not load {ICON_FILENAME}: {err}");
-            egui::IconData {
-                rgba: vec![0; 4],
-                width: 1,
-                height: 1,
-            }
+            Err(err) => log::warn!("Could not load {ICON_FILENAME}: {err}"),
         }
     }
+
+    crate::render::themed_window_icon(config)
 }
