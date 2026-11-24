@@ -1,6 +1,6 @@
 > **Work in Progress (Pre-Release)** — This build is actively in development. Features and UI may continue to evolve, and feedback or bug reports are welcome!
 
-## What's New in v1.3.1 (WIP)
+## What's New in v1.3.2 (WIP)
 
 ### Global Hotkeys
 - **Custom hotkeys.** Add your own extra bindings on the Hotkeys tab: pick any action from a dropdown, press Record, and that key does it too. `+` adds another row and `−` removes one. The built-in keys keep working, and a key already in use is reported instead of silently failing.

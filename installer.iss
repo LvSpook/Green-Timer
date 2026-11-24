@@ -8,7 +8,7 @@
 ; anywhere without editing them.
 
 #define AppName "Green Timer"
-#define AppVersion "1.3.1"
+#define AppVersion "1.3.2"
 #define AppPublisher "Luke V"
 #define AppExeName "GreenTimer.exe"
 
