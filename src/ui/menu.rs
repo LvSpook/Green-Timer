@@ -297,6 +297,12 @@ fn viewport_id(generation: u64) -> egui::ViewportId {
 struct State {
     generation: u64,
     position: Option<Pos2>,
+    /// The point that was right-clicked, which the menu hangs off.
+    anchor: Pos2,
+    /// Usable screen area in points, so the menu can stay inside it.
+    screen: Rect,
+    /// Where the menu was last asked to sit, to avoid re-sending every frame.
+    applied_position: Option<Pos2>,
     result: Option<Option<MenuAction>>,
     applied_size: Option<[u32; 2]>,
     rows: Vec<MenuRow>,
@@ -310,6 +316,9 @@ impl Default for State {
         State {
             generation: 0,
             position: None,
+            anchor: Pos2::ZERO,
+            screen: Rect::NOTHING,
+            applied_position: None,
             result: None,
             applied_size: None,
             rows: Vec::new(),
@@ -325,11 +334,23 @@ thread_local! {
 }
 
 /// Open the menu at `position` (monitor points).
-pub fn open(position: Pos2) {
+///
+/// `pixels_per_point` is the overlay's scale, used only to convert the Windows
+/// work area from physical pixels into the same points the menu is placed in.
+pub fn open(position: Pos2, config: &Config, pixels_per_point: f32) {
+    let (left, top, width, height) = crate::platform::primary_work_area(pixels_per_point.max(0.5));
+    let screen = Rect::from_min_size(Pos2::new(left, top), egui::vec2(width, height));
+    // Placing it against a predicted size means it opens already on the right
+    // side of the click, instead of appearing off-screen then jumping back.
+    let size = estimate_size(&build_rows(&config.context_menu, config));
+    let placed = place_at(position, screen, size);
     STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.generation = state.generation.wrapping_add(1);
-        state.position = Some(position);
+        state.position = Some(placed);
+        state.anchor = position;
+        state.screen = screen;
+        state.applied_position = None;
         state.result = None;
         state.applied_size = None;
         state.seen_focus = false;
@@ -380,6 +401,52 @@ pub fn show(ctx: &egui::Context, config: &Config) {
             .with_inner_size([210.0, 240.0]),
         move |ctx, _class| draw(ctx),
     );
+}
+
+/// Put the menu at the click point, flipping to the other side of it when it
+/// would leave the screen: leftwards if it would run off the right edge, and
+/// upwards if it would run off the bottom. A menu larger than the screen would
+/// still be pinned to the top-left of the usable area so its first rows stay
+/// readable.
+fn place_at(anchor: Pos2, screen: Rect, size: Vec2) -> Pos2 {
+    if !screen.is_positive() {
+        return anchor;
+    }
+    let x = if anchor.x + size.x <= screen.right() {
+        anchor.x
+    } else {
+        anchor.x - size.x
+    };
+    let y = if anchor.y + size.y <= screen.bottom() {
+        anchor.y
+    } else {
+        anchor.y - size.y
+    };
+    Pos2::new(
+        x.clamp(screen.left(), (screen.right() - size.x).max(screen.left()))
+            .round(),
+        y.clamp(screen.top(), (screen.bottom() - size.y).max(screen.top()))
+            .round(),
+    )
+}
+
+/// Rough size of a menu holding `rows`, so it can be dropped in the right place
+/// on its very first frame instead of jumping once the rows are measured.
+///
+/// Mirrors the metrics in [`draw`]: a 6 pt inner margin, 28 pt rows, 9 pt
+/// separators and 2 pt between them.
+fn estimate_size(rows: &[MenuRow]) -> Vec2 {
+    let mut height = 0.0;
+    for (index, row) in rows.iter().enumerate() {
+        if index > 0 {
+            height += 2.0;
+        }
+        height += match row {
+            MenuRow::Separator => 9.0,
+            MenuRow::Item { .. } => 28.0,
+        };
+    }
+    egui::vec2(212.0, (height + 12.0_f32).max(40.0))
 }
 
 /// Take the pending choice: `Some(action)`, or `Some(None)` when dismissed.
@@ -546,6 +613,25 @@ fn draw(ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(desired));
     }
 
+    // The menu hangs off the click point, but flips to the other side of it
+    // rather than running off the screen: leftwards near the right edge and
+    // upwards near the bottom. It is only moved when the result actually
+    // changes, so the window is not nudged every frame.
+    let placed = STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let position = place_at(state.anchor, state.screen, desired);
+        if state.applied_position == Some(position) {
+            None
+        } else {
+            state.applied_position = Some(position);
+            state.position = Some(position);
+            Some(position)
+        }
+    });
+    if let Some(position) = placed {
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(position));
+    }
+
     if let Some(action) = clicked {
         finish(Some(action));
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -562,4 +648,107 @@ fn draw(ctx: &egui::Context) {
     }
 
     ctx.request_repaint();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn screen() -> Rect {
+        Rect::from_min_size(Pos2::new(0.0, 0.0), egui::vec2(1707.0, 960.0))
+    }
+
+    fn size() -> Vec2 {
+        egui::vec2(212.0, 332.0)
+    }
+
+    #[test]
+    fn a_click_with_room_hangs_down_and_to_the_right() {
+        let pos = place_at(Pos2::new(400.0, 200.0), screen(), size());
+        assert_eq!(pos, Pos2::new(400.0, 200.0));
+    }
+
+    #[test]
+    fn a_click_near_the_right_edge_flips_the_menu_leftwards() {
+        let pos = place_at(Pos2::new(1650.0, 200.0), screen(), size());
+        assert_eq!(pos.x, 1650.0 - size().x);
+        assert!(pos.x + size().x <= screen().right(), "{pos:?}");
+        // The height is untouched: only the overflowing axis flips.
+        assert_eq!(pos.y, 200.0);
+    }
+
+    #[test]
+    fn a_click_near_the_bottom_flips_the_menu_upwards() {
+        let pos = place_at(Pos2::new(400.0, 900.0), screen(), size());
+        assert_eq!(pos.y, 900.0 - size().y);
+        assert!(pos.y + size().y <= screen().bottom(), "{pos:?}");
+        assert_eq!(pos.x, 400.0);
+    }
+
+    #[test]
+    fn a_click_in_the_far_corner_flips_both_ways() {
+        let pos = place_at(Pos2::new(1690.0, 940.0), screen(), size());
+        assert!(pos.x + size().x <= screen().right(), "{pos:?}");
+        assert!(pos.y + size().y <= screen().bottom(), "{pos:?}");
+        assert_eq!(pos, Pos2::new(1690.0 - size().x, 940.0 - size().y));
+    }
+
+    #[test]
+    fn the_menu_never_leaves_the_usable_area() {
+        for x in [0.0_f32, 5.0, 500.0, 1690.0, 1706.0] {
+            for y in [0.0_f32, 5.0, 400.0, 950.0, 959.0] {
+                let pos = place_at(Pos2::new(x, y), screen(), size());
+                assert!(pos.x >= screen().left(), "{x},{y} -> {pos:?}");
+                assert!(pos.y >= screen().top(), "{x},{y} -> {pos:?}");
+                assert!(pos.x + size().x <= screen().right(), "{x},{y} -> {pos:?}");
+                assert!(pos.y + size().y <= screen().bottom(), "{x},{y} -> {pos:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_taskbar_offset_screen_is_respected() {
+        // A work area that starts below a top taskbar or on a second monitor.
+        let screen = Rect::from_min_size(Pos2::new(100.0, 40.0), egui::vec2(800.0, 600.0));
+        let pos = place_at(Pos2::new(120.0, 50.0), screen, size());
+        assert!(pos.x >= 100.0 && pos.y >= 40.0, "{pos:?}");
+    }
+
+    #[test]
+    fn a_menu_larger_than_the_screen_is_pinned_to_the_corner() {
+        let tiny = Rect::from_min_size(Pos2::new(0.0, 0.0), egui::vec2(200.0, 200.0));
+        let pos = place_at(Pos2::new(150.0, 150.0), tiny, size());
+        assert_eq!(pos, Pos2::new(0.0, 0.0));
+    }
+
+    #[test]
+    fn the_estimate_grows_with_rows_and_separators() {
+        let rows = vec![
+            MenuRow::Item {
+                icon: MenuIcon::StartPause,
+                label: "Play".into(),
+                checked: false,
+                danger: false,
+                action: MenuAction::StartPause,
+            },
+            MenuRow::Separator,
+            MenuRow::Item {
+                icon: MenuIcon::Settings,
+                label: "Settings".into(),
+                checked: false,
+                danger: false,
+                action: MenuAction::Settings,
+            },
+        ];
+        let estimated = estimate_size(&rows);
+        // Two 28 pt rows, a 9 pt separator, 2 pt gaps and 12 pt of margins.
+        assert!((estimated.y - (28.0 + 9.0 + 28.0 + 4.0 + 12.0)).abs() < 0.01);
+        assert!(estimated.x > 160.0);
+    }
+
+    #[test]
+    fn an_empty_menu_still_has_a_usable_size() {
+        let estimated = estimate_size(&[]);
+        assert_eq!(estimated.y, 40.0);
+    }
 }

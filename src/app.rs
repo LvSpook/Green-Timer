@@ -1044,7 +1044,11 @@ impl TimerApp {
             let origin = ctx
                 .input(|i| i.viewport().outer_rect.map(|r| r.min))
                 .unwrap_or(egui::Pos2::ZERO);
-            crate::menu::open(origin + pos.to_vec2());
+            crate::menu::open(
+                origin + pos.to_vec2(),
+                &self.config,
+                ctx.pixels_per_point(),
+            );
             self.persist();
         }
     }

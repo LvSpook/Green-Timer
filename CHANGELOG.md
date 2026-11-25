@@ -23,6 +23,9 @@
 - **The window no longer shrinks when you use them.** The automatic text hug could collapse the box to its 80 px minimum whenever the display was short, such as a paused timer at `0`, and that tiny size was then saved as your own. Hugging now grows with longer text but never shrinks below the size you chose.
 - **Quick adjust from Settings no longer resizes the Settings window.** Window geometry changes are now pinned to the timer, so the dialog and the overlay can no longer steal each other's size.
 
+### Right-Click Menu
+- **The menu stays on screen.** Right-clicking near the right edge now opens it to the left of the click instead of running off the screen, and near the bottom it opens upwards. It is placed correctly on the first frame, so it never flashes off-screen and jumps back.
+
 ### Notes
 - **One note, saved between launches.** Left-click the timer to open a note window underneath it, type, and the text is kept automatically.
 - **It closes when you click the timer again**, and not before. Clicking another window, the desktop, or anywhere else leaves the note where it is, so it can sit beside your work.
