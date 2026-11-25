@@ -61,7 +61,9 @@
   --warn-line: rgba(245, 166, 35, 0.38);
   --shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
   --focus: #21e070;
-  --radius: 14px;
+  --radius: 8px;
+  --radius-sm: 4px;
+  --radius-pill: 999px;
 }
 
 :root[data-theme="light"] {
@@ -139,7 +141,7 @@ body {
 
 /* Browser surfaces belong to the design too. */
 ::selection { background: var(--accent); color: var(--on-accent); }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
 
 ::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: var(--bg-alt); }
@@ -176,7 +178,7 @@ a:hover { text-decoration-color: currentColor; }
   top: -60px;
   z-index: 40;
   padding: 10px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius);
   background: var(--accent);
   color: var(--on-accent);
   font-weight: 600;
@@ -187,7 +189,7 @@ a:hover { text-decoration-color: currentColor; }
 
 .wrap {
   width: 100%;
-  max-width: 1080px;
+  max-width: 1140px;
   margin: 0 auto;
   padding: 0 24px;
 }
@@ -220,7 +222,7 @@ a:hover { text-decoration-color: currentColor; }
   letter-spacing: -0.015em;
   text-decoration: none;
 }
-.brand img { width: 26px; height: 26px; border-radius: 7px; display: block; }
+.brand img { width: 26px; height: 26px; border-radius: 6px; display: block; }
 .brand b { color: var(--accent-ink); font-weight: 700; }
 
 .nav-links {
@@ -239,7 +241,7 @@ a:hover { text-decoration-color: currentColor; }
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--muted);
@@ -325,7 +327,7 @@ a:hover { text-decoration-color: currentColor; }
   font-weight: 500;
   letter-spacing: 0.01em;
   padding: 5px 11px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   border: 1px solid var(--accent-line);
   background: var(--accent-soft);
   color: var(--accent-ink);
@@ -351,7 +353,7 @@ a:hover { text-decoration-color: currentColor; }
   align-items: center;
   gap: 9px;
   padding: 12px 22px;
-  border-radius: 10px;
+  border-radius: var(--radius);
   font-weight: 600;
   font-size: 0.95rem;
   border: 1px solid transparent;
@@ -488,8 +490,8 @@ thead th {
   color: var(--muted);
   font-weight: 500;
 }
-thead th:first-child { border-radius: 8px 0 0 8px; }
-thead th:last-child { border-radius: 0 8px 8px 0; }
+thead th:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+thead th:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
 tbody tr + tr { border-top: 1px solid var(--border); }
 tbody td:first-child { color: var(--text); }
 tbody td:last-child { color: var(--muted); }
@@ -500,7 +502,7 @@ kbd {
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 0.8rem;
   font-weight: 500;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-hi);
   border-bottom-width: 2px;
   background: var(--panel-2);
@@ -527,7 +529,7 @@ code {
 p code, li code, td code {
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   padding: 1px 5px;
   color: var(--text);
   overflow-wrap: anywhere;
@@ -543,7 +545,7 @@ td code { white-space: nowrap; }
 }
 
 .swatch {
-  border-radius: 12px;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
   overflow: hidden;
   background: var(--panel);
@@ -601,7 +603,7 @@ footer a:hover { color: var(--text); text-decoration: underline; text-underline-
 
 @media (max-width: 560px) {
   .wrap { padding: 0 20px; }
-  section { padding: 44px 0; }
+  section { padding: 46px 0; }
   .hero { padding-top: 32px; }
   .hero h1 { max-width: none; }
   .btn { padding: 11px 18px; }
