@@ -162,12 +162,20 @@ pub fn target_color(config: &Config, role: ColorRole) -> Color32 {
     }
 }
 
-pub fn background_alpha(config: &Config) -> u8 {
-    if config.window_blur {
-        100
-    } else {
-        140
+/// Opacity of the timer's background panel, `0.0..=1.0`.
+///
+/// `None` keeps the look the app has always had: a little less see-through
+/// while the blur is on, so the numbers stay readable over it.
+pub fn background_opacity(config: &Config) -> f32 {
+    match config.background_opacity {
+        Some(opacity) => opacity.clamp(0.0, 1.0),
+        None if config.window_blur => 100.0 / 255.0,
+        None => 140.0 / 255.0,
     }
+}
+
+pub fn background_alpha(config: &Config) -> u8 {
+    (background_opacity(config) * 255.0).round() as u8
 }
 
 /// The timer panel's own background colour at a given alpha.

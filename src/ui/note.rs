@@ -34,6 +34,8 @@ struct Look {
     paper: Color32,
     ink: Color32,
     resizable: bool,
+    border: bool,
+    radius: f32,
     size: egui::Vec2,
 }
 
@@ -75,9 +77,8 @@ struct State {
     /// handed over: otherwise a flick of the mouse would save a stray size.
     live_size: Option<(u32, u32)>,
     live_size_at: Option<Instant>,
-    /// Alpha last handed to the OS compositor, so the fade is only re-applied
-    /// when it actually changes rather than every frame.
-    applied_alpha: Option<u8>,
+    /// Whether the window has been told to composite its own alpha yet.
+    made_transparent: bool,
     /// Colours the window was last drawn with.
     look: Option<Look>,
 }
@@ -125,7 +126,7 @@ pub fn open(anchor: Rect, config: &Config, pixels_per_point: f32) {
         state.reported_size = None;
         state.live_size = None;
         state.live_size_at = None;
-        state.applied_alpha = None;
+        state.made_transparent = false;
         state.look = None;
     });
 }
@@ -234,10 +235,10 @@ pub fn show(ctx: &egui::Context, config: &Config) {
                 &config,
             )))
             .with_decorations(false)
-            // The window is faded as a whole by the OS compositor (see
-            // `set_window_alpha`), so it never needs a transparent GL config:
-            // that fails on many Windows drivers, and on this machine it only
-            // logs an error every time the note opens.
+            // The transparency flag is left off deliberately: the driver refuses
+            // a transparent config for a second window and eframe would log an
+            // error every time the note opens. `set_window_transparent` asks the
+            // desktop compositor instead, which works on this driver.
             .with_transparent(false)
             .with_resizable(resizable)
             .with_taskbar(false)
@@ -328,38 +329,79 @@ fn text_color(config: &Config) -> Color32 {
     }
 }
 
-/// The background the note is written on: the timer's own panel colour, fully
-/// opaque.
+/// The background the note is written on: the timer's own panel colour, faded
+/// by the note's opacity.
 ///
-/// The window itself is faded by the OS compositor (see [`note_alpha`]) rather
-/// than by giving the paper a low alpha: the paper sits on an opaque window
-/// surface, so a translucent paper would only blend towards black and, on a
-/// black theme, look completely unchanged.
+/// Only the paper carries this alpha: the text and frame are drawn on top at
+/// full strength, so the note fades towards whatever is behind it while the
+/// writing stays crisp. That needs a window surface with a real alpha channel,
+/// which `set_window_transparent` asks the desktop compositor for.
+///
+/// Following the timer copies its panel exactly, theme overrides and all, so a
+/// theme that makes the timer solid makes the note solid too.
 pub fn paper_color(config: &Config) -> Color32 {
     let panel = crate::render::panel_color(config, crate::render::background_alpha(config));
-    Color32::from_rgb(panel.r(), panel.g(), panel.b())
+    match config.note_bg_opacity {
+        None => panel,
+        Some(opacity) => Color32::from_rgba_unmultiplied(
+            panel.r(),
+            panel.g(),
+            panel.b(),
+            (opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
+        ),
+    }
 }
 
-/// Opacity of the whole note window, `0.0..=1.0`.
+/// Opacity of the note's paper, `0.0..=1.0`.
 ///
-/// `None` means "same as the timer": the overlay's own opacity setting, so the
-/// two fade together. Settings exposes [`timer_note_opacity`] for the slider.
+/// `None` means "same as the timer's background", so the two match by default.
 pub fn note_opacity(config: &Config) -> f32 {
-    config
-        .note_bg_opacity
-        .unwrap_or(config.opacity)
-        .clamp(0.0, 1.0)
+    match config.note_bg_opacity {
+        Some(opacity) => opacity.clamp(0.0, 1.0),
+        None => timer_note_opacity(config),
+    }
 }
 
-/// Opacity of the timer's own panel, `0.0..=1.0`, which is what the note uses
-/// by default so the two match.
+/// Opacity of the timer's own background, `0.0..=1.0`, which is what the note
+/// uses by default so the two match.
+///
+/// This is the alpha the panel is really painted with, so it accounts for the
+/// theme's own override rather than just the background setting.
 pub fn timer_note_opacity(config: &Config) -> f32 {
-    config.opacity.clamp(0.0, 1.0)
+    let panel = crate::render::panel_color(config, crate::render::background_alpha(config));
+    panel.a() as f32 / 255.0
 }
 
-/// The note window's alpha, `0..=255`.
+/// The note window's alpha, `0..=255`, over the desktop.
 pub fn note_alpha(config: &Config) -> u8 {
-    (note_opacity(config) * 255.0).round() as u8
+    paper_color(config).a()
+}
+
+/// The note's border, in the timer's number colour.
+///
+/// Switched off entirely by the "Show border" setting, so the text can use the
+/// space the stroke would have taken.
+fn frame_stroke(config: &Config) -> Stroke {
+    if config.note_border {
+        Stroke::new(2.0_f32, frame_color(config))
+    } else {
+        Stroke::NONE
+    }
+}
+
+/// Corner radius for the note, in points.
+///
+/// `None` follows the timer's own corners, so the note echoes the overlay. The
+/// radius is capped at half the shorter side, past which the rounding would
+/// stop looking like a rounded rectangle.
+pub fn note_radius(config: &Config, rect: Rect) -> f32 {
+    let timer = match config.note_corner_radius {
+        Some(radius) => radius as f32,
+        None => crate::render::corner_radius(config, rect),
+    };
+    timer
+        .max(0.0)
+        .min(rect.width().min(rect.height()) / 2.0)
 }
 
 /// Visuals used only inside the note window: the user's ink colour on a clear
@@ -427,6 +469,8 @@ fn draw(ctx: &egui::Context, config: &Config, generation: u64) {
         paper,
         ink,
         resizable: config.note_resizable,
+        border: config.note_border,
+        radius: note_radius(config, Rect::from_min_size(Pos2::ZERO, size)),
         size,
     };
     let changed = STATE.with(|state| {
@@ -461,16 +505,26 @@ fn draw(ctx: &egui::Context, config: &Config, generation: u64) {
     // use the whole block. The stroke is inset by half its width: on the window
     // edge a centred stroke would be clipped to half thickness.
     let window = ctx.screen_rect();
-    let edge = Stroke::new(2.0_f32, frame);
+    let edge = frame_stroke(config);
+    let radius = note_radius(config, window);
     let paper_rect = window.shrink(edge.width * 0.5);
-    ctx.layer_painter(egui::LayerId::background())
-        .rect(paper_rect, 0.0, paper, edge);
+    // The surface carries a real alpha channel, so the rounded corners simply
+    // show whatever is behind the note, exactly like the timer's own panel.
+    ctx.layer_painter(egui::LayerId::background()).rect(
+        paper_rect,
+        egui::Rounding::same(radius),
+        paper,
+        edge,
+    );
+
+    // Without a border the text keeps the space the stroke would have taken.
+    let inset = MARGIN + edge.width;
 
     egui::CentralPanel::default()
         .frame(
             egui::Frame::none()
                 .fill(Color32::TRANSPARENT)
-                .inner_margin(egui::Margin::same(MARGIN + edge.width)),
+                .inner_margin(egui::Margin::same(inset)),
         )
         .show(ctx, |ui| {
             ui.set_style(style);
@@ -504,25 +558,23 @@ fn draw(ctx: &egui::Context, config: &Config, generation: u64) {
         store(&text);
     }
 
-    // The window is faded as a whole through the OS compositor rather than by
-    // the paper's own alpha, so lowering the opacity lets the desktop show
-    // through on every graphics driver. The paper stays opaque, so a note at
-    // full opacity is exactly the page it has always been.
-    let alpha = note_alpha(config);
-    let apply_alpha = STATE.with(|state| {
+    // The paper carries its own alpha now that the window composites it, so the
+    // note never needs fading as a whole: the text stays at full strength while
+    // the page fades. The overlay gets a see-through surface from Windows when
+    // it is created; a child window like this does not, so ask for it once.
+    let needs_transparency = STATE.with(|state| {
         let mut state = state.borrow_mut();
-        if state.applied_alpha == Some(alpha) {
+        if state.made_transparent {
             return false;
         }
-        state.applied_alpha = Some(alpha);
-        true
+        state.made_transparent = crate::platform::set_window_transparent(NOTE_WINDOW_TITLE);
+        log::debug!("note transparency: {}", state.made_transparent);
+        !state.made_transparent
     });
-    if apply_alpha && !crate::platform::set_window_alpha(NOTE_WINDOW_TITLE, alpha) {
+    if needs_transparency {
         // The window does not exist yet on the first frame; try again next one.
-        STATE.with(|state| state.borrow_mut().applied_alpha = None);
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
-
     // A frameless window gets no native resize border, so the edges and corners
     // are hit-tested here and handed to the OS with `BeginResize`.
     if config.note_resizable {
@@ -796,33 +848,39 @@ mod tests {
             frame_color(&config),
             crate::render::target_color(&config, crate::engine::ColorRole::Normal)
         );
-        // The paper matches the timer's own panel. It is painted opaque and the
-        // window is faded instead, so a translucent panel colour never blends
-        // the page into itself.
+        // The paper is the timer's own panel colour, faded by the note's
+        // opacity. Only the paper carries that alpha, so the writing above it
+        // stays fully opaque.
         let panel = crate::render::panel_color(&config, crate::render::background_alpha(&config));
         let paper = paper_color(&config);
         assert_eq!(
             (paper.r(), paper.g(), paper.b()),
             (panel.r(), panel.g(), panel.b())
         );
-        assert_eq!(paper.a(), 255);
+        assert_eq!(
+            paper.a(),
+            panel.a(),
+            "following the timer copies its panel alpha exactly"
+        );
     }
 
     #[test]
     fn the_note_background_matches_the_timer_until_overridden() {
         let mut config = Config::default();
         assert_eq!(config.note_bg_opacity, None, "default is same as timer");
-        assert_eq!(note_opacity(&config), config.opacity);
-        assert_eq!(note_alpha(&config), (config.opacity * 255.0).round() as u8);
+        assert_eq!(note_alpha(&config), crate::render::background_alpha(&config));
+        assert_eq!(timer_note_opacity(&config), 140.0 / 255.0);
 
-        // Following the timer means following its *opacity*, not the theme's
-        // panel alpha: a black panel at alpha 0 would otherwise be invisible.
-        config.theme = crate::config::Theme::WarmPaper;
-        config.opacity = 0.4;
-        assert_eq!(note_opacity(&config), 0.4);
+        // A slider value on the timer's background moves the note with it.
+        config.background_opacity = Some(0.4);
         assert_eq!(note_alpha(&config), 102);
 
-        // An explicit value wins and is clamped.
+        // A theme that paints its own panel alpha is followed exactly, rather
+        // than multiplied by the background slider on top of it.
+        config.theme = crate::config::Theme::Chalkboard;
+        assert_eq!(note_alpha(&config), 255, "the chalkboard is solid");
+
+        // An explicit note value wins and is clamped.
         config.note_bg_opacity = Some(0.5);
         assert_eq!(note_alpha(&config), 128);
         config.note_bg_opacity = Some(9.0);
@@ -830,18 +888,67 @@ mod tests {
         config.note_bg_opacity = Some(-3.0);
         assert_eq!(note_alpha(&config), 0, "out of range is clamped");
 
-        // Either way the page itself stays solid.
-        assert_eq!(paper_color(&config).a(), 255);
+        // Only the paper fades; the text colour is never touched.
+        config.note_bg_opacity = Some(0.2);
+        assert_eq!(text_color(&config).a(), 255);
+        assert_eq!(paper_color(&config).a(), 51);
     }
 
     #[test]
-    fn the_slider_default_shows_the_timers_own_opacity() {
+    fn the_scale_slider_default_shows_the_timers_own_background() {
         let config = Config {
-            opacity: 0.7,
+            background_opacity: Some(0.7),
+            opacity: 0.3,
             ..Default::default()
         };
-        assert!((timer_note_opacity(&config) - 0.7).abs() < 0.001);
-        assert!((note_opacity(&config) - 0.7).abs() < 0.001);
+        // The note follows the background, never the whole-window fade.
+        assert!((timer_note_opacity(&config) - 0.7).abs() < 0.01);
+        assert!((note_opacity(&config) - 0.7).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_border_can_be_switched_off() {
+        let mut config = Config::default();
+        assert!(config.note_border, "the border is on by default");
+        assert_eq!(frame_stroke(&config).width, 2.0);
+        assert_eq!(frame_stroke(&config).color, frame_color(&config));
+
+        config.note_border = false;
+        assert_eq!(frame_stroke(&config).width, 0.0);
+        assert_eq!(frame_stroke(&config).color, Color32::TRANSPARENT);
+    }
+
+    #[test]
+    fn the_note_corners_follow_the_timer_until_overridden() {
+        let mut config = Config::default();
+        let window = Rect::from_min_size(Pos2::ZERO, egui::vec2(280.0, 200.0));
+
+        // Following the timer means using the shape and radius it uses.
+        config.window_shape = crate::config::WindowShape::Rounded;
+        config.corner_radius = 18;
+        assert_eq!(note_radius(&config, window), 18.0);
+        config.window_shape = crate::config::WindowShape::Rectangular;
+        assert_eq!(note_radius(&config, window), 0.0);
+
+        // An explicit radius wins, and never exceeds half the shorter side.
+        config.note_corner_radius = Some(24);
+        assert_eq!(note_radius(&config, window), 24.0);
+        config.note_corner_radius = Some(10_000);
+        assert_eq!(note_radius(&config, window), 100.0, "capped at half the height");
+    }
+
+    #[test]
+    fn a_stored_opacity_and_radius_are_sanitised() {
+        let config = Config {
+            background_opacity: Some(4.0),
+            note_corner_radius: Some(9_999),
+            note_width: 200,
+            note_height: 300,
+            ..Default::default()
+        }
+        .validated();
+        assert_eq!(config.background_opacity, Some(1.0));
+        assert_eq!(config.note_corner_radius, Some(100));
     }
 
     #[test]

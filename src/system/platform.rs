@@ -261,21 +261,23 @@ mod imp {
         }
     }
 
-    /// Fade a whole window with the OS compositor.
+    /// Make a whole window's surface honour its own alpha channel.
     ///
-    /// Per-pixel see-through needs a transparent GL config, which many Windows
-    /// drivers refuse, so the note uses the layered-window route instead: the
-    /// compositor blends the finished window against the desktop, which works
-    /// on every driver. `alpha` is `0..=255`, where 255 leaves it fully solid.
+    /// The overlay gets this from Windows at creation time, but a child viewport
+    /// like the note window does not: the graphics driver reports no transparent
+    /// config for sub-windows, so the flag is silently dropped. Asking the
+    /// desktop compositor for a blur-behind region with no area makes the window
+    /// composite its pixels as they are drawn, so a translucent paper blends
+    /// with the desktop while opaque text stays crisp.
     ///
-    /// Returns whether the attributes were applied; the window may not exist
-    /// yet on the frame the note opens.
-    pub fn set_window_alpha(title: &str, alpha: u8) -> bool {
-        use windows::Win32::Foundation::COLORREF;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            FindWindowW, GetWindowLongW, SetLayeredWindowAttributes, SetWindowLongW,
-            GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED,
+    /// Returns whether the compositor accepted it; the window may not exist yet
+    /// on the frame the note opens.
+    pub fn set_window_transparent(title: &str) -> bool {
+        use windows::Win32::Graphics::Dwm::{
+            DwmEnableBlurBehindWindow, DWM_BLURBEHIND, DWM_BB_BLURREGION, DWM_BB_ENABLE,
         };
+        use windows::Win32::Graphics::Gdi::CreateRectRgn;
+        use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
 
         let title = wide(title);
         let Ok(window) = (unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) }) else {
@@ -284,15 +286,20 @@ mod imp {
         if window.0.is_null() {
             return false;
         }
-        unsafe {
-            let current = GetWindowLongW(window, GWL_EXSTYLE) as u32;
-            let layered = current | WS_EX_LAYERED.0;
-            if layered != current {
-                SetWindowLongW(window, GWL_EXSTYLE, layered as i32);
-            }
-            // The colour key is unused with `LWA_ALPHA`, but the call needs one.
-            SetLayeredWindowAttributes(window, COLORREF(0), alpha, LWA_ALPHA).is_ok()
-        }
+
+        // An empty region means "no blur area", which is how a window is made to
+        // composite its own alpha rather than the wallpaper behind it.
+        let region = unsafe { CreateRectRgn(0, 0, -1, -1) };
+        let behind = DWM_BLURBEHIND {
+            dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+            fEnable: windows::Win32::Foundation::BOOL(1),
+            hRgnBlur: region,
+            fTransitionOnMaximized: windows::Win32::Foundation::BOOL(0),
+        };
+        let applied = unsafe { DwmEnableBlurBehindWindow(window, &behind).is_ok() };
+        // The compositor copies the region, so ours is still ours to free.
+        let _ = unsafe { windows::Win32::Graphics::Gdi::DeleteObject(region) };
+        applied
     }
 
     /// Play a WAV file asynchronously, or the OS alert when no file is usable.
@@ -324,7 +331,7 @@ mod imp {
     pub fn set_click_through(_window: isize, _enabled: bool) {}
     pub fn apply_blur(_window: isize, _enable: bool) {}
     pub fn set_dark_title_bar(_window: isize, _enabled: bool) {}
-    pub fn set_window_alpha(_title: &str, _alpha: u8) -> bool {
+    pub fn set_window_transparent(_title: &str) -> bool {
         false
     }
     pub fn foreground_window() -> u64 {
@@ -365,13 +372,14 @@ pub fn set_dark_title_bar(window: isize, enabled: bool) {
     imp::set_dark_title_bar(window, enabled);
 }
 
-/// Fade a whole window with the OS compositor, by title.
+/// Let a window's own alpha channel show the desktop through it, by title.
 ///
-/// `alpha` is `0..=255`. Returns whether it was applied; the window may not
-/// exist yet on the frame a note opens.
-pub fn set_window_alpha(title: &str, alpha: u8) -> bool {
+/// Child viewports (the note) do not get this at creation the way the overlay
+/// does. Returns whether the compositor accepted it; the window may not exist
+/// yet on the frame a note opens.
+pub fn set_window_transparent(title: &str) -> bool {
     if IS_WINDOWS {
-        imp::set_window_alpha(title, alpha)
+        imp::set_window_transparent(title)
     } else {
         false
     }

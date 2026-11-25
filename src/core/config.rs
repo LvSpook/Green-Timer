@@ -296,6 +296,9 @@ pub struct Config {
     pub sound_cue: bool,
     pub custom_sound_path: String,
     pub opacity: f32,
+    /// Opacity of the background panel alone, `0.0..=1.0`, on top of the
+    /// whole-window [`Config::opacity`]. `None` keeps the original look.
+    pub background_opacity: Option<f32>,
     pub text_outline: bool,
     pub text_outline_color: Rgb,
     pub text_outline_thickness: f32,
@@ -364,10 +367,15 @@ pub struct Config {
     pub note_height: u32,
     /// Whether the note window's edges can be dragged to resize it.
     pub note_resizable: bool,
-    /// Opacity of the whole note window, `0.0..=1.0`. `None` follows the
-    /// timer's own opacity, so the two fade together until the user picks
-    /// something else.
+    /// Opacity of the note's paper, `0.0..=1.0`. `None` follows the timer's
+    /// background, so the two match until the user picks something else. Only
+    /// the paper fades: the note's text stays fully opaque.
     pub note_bg_opacity: Option<f32>,
+    /// Whether the note is drawn with a border in the timer's number colour.
+    pub note_border: bool,
+    /// Corner radius of the note window, in points. `None` follows the timer's
+    /// own corners.
+    pub note_corner_radius: Option<u32>,
     pub context_menu: ContextMenuConfig,
     pub profiles: Vec<SavedProfile>,
     pub app_profile_rules: Vec<AppProfileRule>,
@@ -403,6 +411,7 @@ impl Default for Config {
             sound_cue: true,
             custom_sound_path: String::new(),
             opacity: 1.0,
+            background_opacity: None,
             text_outline: true,
             text_outline_color: Rgb(0, 0, 0),
             text_outline_thickness: 2.0,
@@ -457,6 +466,8 @@ impl Default for Config {
             note_height: 280,
             note_resizable: true,
             note_bg_opacity: None,
+            note_border: true,
+            note_corner_radius: None,
             context_menu: ContextMenuConfig::default(),
             profiles: Vec::new(),
             app_profile_rules: Vec::new(),
@@ -568,6 +579,16 @@ impl Config {
             .note_bg_opacity
             .filter(|opacity| opacity.is_finite())
             .map(|opacity| opacity.clamp(0.0, 1.0));
+        self.background_opacity = self
+            .background_opacity
+            .filter(|opacity| opacity.is_finite())
+            .map(|opacity| opacity.clamp(0.0, 1.0));
+        // A radius larger than half the shorter side would make the rounding
+        // helpers divide the shape oddly; the note clamps its own drawing too,
+        // but a sane stored value keeps the settings file meaningful.
+        self.note_corner_radius = self
+            .note_corner_radius
+            .map(|radius| radius.min(self.note_width.min(self.note_height) / 2));
         self
     }
 }

@@ -929,6 +929,34 @@ impl SettingsState {
                 }
                 ui.end_row();
 
+                ui.label("Background opacity");
+                ui.horizontal(|ui| {
+                    let following = self.draft.background_opacity.is_none();
+                    let mut alpha =
+                        (crate::render::background_opacity(&self.draft) * 100.0).round() as u8;
+                    if ui
+                        .add(
+                            egui::Slider::new(&mut alpha, 0..=100)
+                                .suffix(" %")
+                                .clamping(egui::SliderClamping::Always),
+                        )
+                        .changed()
+                    {
+                        self.draft.background_opacity = Some(alpha as f32 / 100.0);
+                    }
+                    if ui
+                        .add_enabled(!following, egui::Button::new("Reset"))
+                        .on_hover_text(
+                            "Go back to the automatic value, so the background keeps the \
+                             look it has always had.",
+                        )
+                        .clicked()
+                    {
+                        self.draft.background_opacity = None;
+                    }
+                });
+                ui.end_row();
+
                 if self.draft.show_text {
                     ui.label("Font family");
                     egui::ComboBox::from_id_salt("font")
@@ -1503,25 +1531,29 @@ impl SettingsState {
         );
 
         ui.add_space(8.0);
-        // Opacity starts on "same as timer", so a fresh note matches it exactly.
+        // Opacity starts on "same as timer background", so a fresh note matches
+        // it exactly. Only the paper fades; the note's writing stays solid.
         let same_as_timer = self.draft.note_bg_opacity.is_none();
         let mut opacity = (crate::note::note_opacity(&self.draft) * 100.0).round() as u8;
         ui.horizontal(|ui| {
-            ui.label("Background opacity");
+            ui.label("Paper opacity");
             if ui
                 .add(
                     egui::Slider::new(&mut opacity, 0..=100)
                         .suffix("%")
                         .clamping(egui::SliderClamping::Always),
                 )
-                .on_hover_text("How solid the note window is; lower lets the desktop show through")
+                .on_hover_text(
+                    "How solid the note's paper is; lower lets the desktop show through \
+                     while the text stays fully readable",
+                )
                 .changed()
             {
                 self.draft.note_bg_opacity = Some(opacity as f32 / 100.0);
             }
             if ui
-                .add_enabled(!same_as_timer, egui::Button::new("Same as timer"))
-                .on_hover_text("Use exactly the timer's own opacity (the default)")
+                .add_enabled(!same_as_timer, egui::Button::new("Same as timer background"))
+                .on_hover_text("Use exactly the timer's background opacity (the default)")
                 .clicked()
             {
                 self.draft.note_bg_opacity = None;
@@ -1529,9 +1561,47 @@ impl SettingsState {
         });
         if same_as_timer {
             ui.small(format!(
-                "Matches the timer's own opacity ({}%).",
+                "Matches the timer's background ({}%).",
                 (crate::note::timer_note_opacity(&self.draft) * 100.0).round() as u8
             ));
+        }
+
+        ui.add_space(4.0);
+        ui.checkbox(&mut self.draft.note_border, "Show a border");
+
+        ui.add_space(4.0);
+        // Corners start on the timer's own, so the note echoes the overlay.
+        let same_corners = self.draft.note_corner_radius.is_none();
+        let mut radius = crate::note::note_radius(
+            &self.draft,
+            egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(
+                    self.draft.note_width.max(crate::config::NOTE_MIN_SIDE) as f32,
+                    self.draft.note_height.max(crate::config::NOTE_MIN_SIDE) as f32,
+                ),
+            ),
+        )
+        .round() as u32;
+        ui.horizontal(|ui| {
+            ui.label("Corner radius");
+            if ui
+                .add(egui::Slider::new(&mut radius, 0..=120).suffix(" px"))
+                .on_hover_text("How round the note's corners are")
+                .changed()
+            {
+                self.draft.note_corner_radius = Some(radius);
+            }
+            if ui
+                .add_enabled(!same_corners, egui::Button::new("Same as timer"))
+                .on_hover_text("Use the timer's own corner shape (the default)")
+                .clicked()
+            {
+                self.draft.note_corner_radius = None;
+            }
+        });
+        if same_corners {
+            ui.small("Matches the timer's corners.");
         }
 
         ui.add_space(4.0);

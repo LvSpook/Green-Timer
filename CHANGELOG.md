@@ -15,6 +15,7 @@
 ### Appearance
 - **The edge distance no longer jumps as the timer changes.** The panel now measures the digits in fixed-width slots that assume a `0`, so every digit sits the same distance from the background edge. When a leading zero disappears the panel shrinks toward the middle by exactly one slot instead of snapping to the digits.
 - **The distance is adjustable** on the Appearance tab as "Edge distance", and it applies equally to the left/right and top/bottom edges. The outline and shadow get their own extra room, so the visible gap stays exactly what you set.
+- **The background has its own opacity.** A new "Background opacity" slider on the Appearance tab fades just the panel behind the numbers, separately from the existing "Window opacity" which fades everything including the digits and border. It starts at the look the app has always had, and **Reset** puts it back there. The two work together: window opacity fades the whole overlay, then background opacity fades what remains.
 
 ### Quick Adjust
 - **Adding time can exceed the starting countdown.** `+1m` (and `+10s`) now push the countdown past the value it was originally set to instead of stopping there. The timer keeps running from the new value.
@@ -30,10 +31,12 @@
 - **One note, saved between launches.** Left-click the timer to open a note window underneath it, type, and the text is kept automatically.
 - **It closes when you click the timer again**, and not before. Clicking another window, the desktop, or anywhere else leaves the note where it is, so it can sit beside your work.
 - **A blank page, framed in your timer's colour.** There is no title bar, header, close button, counter or hint text: just the writing. The frame uses the timer's number colour, and the page behind the text uses the timer's own background.
+- **The page is see-through, the writing is not.** The note now has a real see-through surface, so the background fades towards whatever is behind it while the text stays fully solid. Its opacity is adjustable on the Notes tab, from fully solid to almost invisible, and starts on **Same as timer background**, which matches the timer panel's own fade.
+- **The frame can be turned off.** A "Show a border" option on the Notes tab removes it, letting the text use the space the border took.
+- **Its corners can be rounded.** A "Corner radius" slider on the Notes tab shapes the window itself, so the corners are genuinely cut away rather than drawn over. **Same as timer** matches the timer's own corners. Rounded corners and the see-through page work together, so a faded note has soft corners too.
 - **The text has its own colour,** with a picker on the Notes tab, or it can be left following the timer's numbers. The caret uses the text colour, and selected text is highlighted in a translucent version of the frame colour.
 - **It fills the block, wraps, and scrolls.** Long notes wrap at the window edge and scroll down inside the panel instead of overflowing.
 - **It follows the timer.** Drag the timer anywhere and the note travels with it, staying centred underneath, so the two can never be separated.
-- **Its background opacity is adjustable** on the Notes tab, from fully solid to almost invisible. It starts on **Same as timer**, matching the timer's own opacity, and that button puts it back there.
 - **The edges can be dragged to resize it,** and it does not have to stay square. The note re-centres under the timer as it grows or shrinks, so it always stays beneath the panel. The size is remembered. Resizing can be switched off on the Notes tab, which also has width and height fields and a Reset button.
 - **Double-click still pauses the timer.** A single click waits out the double-click window first, so a double-click never pops the note open as well.
 - **Global hotkeys are paused while you type** so a bound letter types instead of firing its shortcut.
