@@ -364,6 +364,10 @@ pub struct Config {
     pub note_height: u32,
     /// Whether the note window's edges can be dragged to resize it.
     pub note_resizable: bool,
+    /// Opacity of the whole note window, `0.0..=1.0`. `None` follows the
+    /// timer's own opacity, so the two fade together until the user picks
+    /// something else.
+    pub note_bg_opacity: Option<f32>,
     pub context_menu: ContextMenuConfig,
     pub profiles: Vec<SavedProfile>,
     pub app_profile_rules: Vec<AppProfileRule>,
@@ -452,6 +456,7 @@ impl Default for Config {
             note_width: 280,
             note_height: 280,
             note_resizable: true,
+            note_bg_opacity: None,
             context_menu: ContextMenuConfig::default(),
             profiles: Vec::new(),
             app_profile_rules: Vec::new(),
@@ -557,6 +562,12 @@ impl Config {
         self.note = self.note.chars().take(NOTE_MAX_CHARS).collect();
         self.note_width = self.note_width.clamp(NOTE_MIN_SIDE, 2_000);
         self.note_height = self.note_height.clamp(NOTE_MIN_SIDE, 2_000);
+        // A note opacity is a fraction, never a NaN or an out-of-range value
+        // that would paint an invisible page.
+        self.note_bg_opacity = self
+            .note_bg_opacity
+            .filter(|opacity| opacity.is_finite())
+            .map(|opacity| opacity.clamp(0.0, 1.0));
         self
     }
 }

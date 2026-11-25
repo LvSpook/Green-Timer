@@ -23,6 +23,8 @@ use std::time::Instant;
 const GAP: f32 = 10.0;
 /// Inset from the frame to the text, in points.
 const MARGIN: f32 = 10.0;
+/// Title of the note's OS window. Stable so the compositor fade can find it.
+const NOTE_WINDOW_TITLE: &str = "Green Timer Note";
 
 /// The appearance the open window is currently drawn with, so a change made in
 /// Settings can repaint it at once without polling every frame.
@@ -42,6 +44,14 @@ struct State {
     generation: u64,
     /// Where the window was placed when it opened.
     position: Option<Pos2>,
+    /// The overlay rect last seen, so the note can follow the timer as it is
+    /// dragged around the desktop.
+    anchor: Option<Rect>,
+    /// The work area, in points, captured when the window opened.
+    screen: Option<Rect>,
+    /// Inner size seen on the previous frame, so a resize drag is detected
+    /// without a dedicated "resizing" flag from the OS.
+    live_inner: Option<egui::Vec2>,
     /// Size at which the window opened. Drags are applied on top of it.
     size: Option<egui::Vec2>,
     /// The text being edited. Mirrors `Config::note`, plus any unsaved edits.
@@ -65,6 +75,9 @@ struct State {
     /// handed over: otherwise a flick of the mouse would save a stray size.
     live_size: Option<(u32, u32)>,
     live_size_at: Option<Instant>,
+    /// Alpha last handed to the OS compositor, so the fade is only re-applied
+    /// when it actually changes rather than every frame.
+    applied_alpha: Option<u8>,
     /// Colours the window was last drawn with.
     look: Option<Look>,
 }
@@ -95,12 +108,16 @@ pub fn open(anchor: Rect, config: &Config, pixels_per_point: f32) {
         crate::platform::primary_work_area(pixels_per_point.max(0.5));
     let screen = Rect::from_min_size(Pos2::new(left, top), egui::vec2(width, height));
     let size = note_size(config);
+    let position = place_near(anchor, screen, size);
     STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.generation = state.generation.wrapping_add(1);
         state.open = true;
         state.size = Some(size);
-        state.position = Some(place_near(anchor, screen, size));
+        state.position = Some(position);
+        state.anchor = Some(anchor);
+        state.screen = Some(screen);
+        state.live_inner = None;
         state.buffer = config.note.clone();
         state.reported = config.note.clone();
         state.pending = None;
@@ -108,6 +125,7 @@ pub fn open(anchor: Rect, config: &Config, pixels_per_point: f32) {
         state.reported_size = None;
         state.live_size = None;
         state.live_size_at = None;
+        state.applied_alpha = None;
         state.look = None;
     });
 }
@@ -120,6 +138,9 @@ pub fn close() {
         let mut state = state.borrow_mut();
         state.open = false;
         state.position = None;
+        state.anchor = None;
+        state.screen = None;
+        state.live_inner = None;
         state.size = None;
         // Closing right after a drag must still remember the new size, even
         // though it had not yet settled long enough to be reported.
@@ -174,11 +195,9 @@ pub fn take_size() -> Option<(u32, u32)> {
 
 /// Draw the note window if it is open. Must be called every frame.
 pub fn show(ctx: &egui::Context, config: &Config) {
-    let Some((generation, position, size)) = STATE.with(|state| {
+    let Some((generation, size)) = STATE.with(|state| {
         let state = state.borrow();
-        state
-            .open
-            .then(|| (state.generation, state.position, state.size))
+        state.open.then(|| (state.generation, state.size))
     }) else {
         // Closing hides the window from `close()`; make sure the viewport is
         // told too, or the empty window would linger on screen.
@@ -188,7 +207,7 @@ pub fn show(ctx: &egui::Context, config: &Config) {
         }
         return;
     };
-    let (Some(position), Some(size)) = (position, size) else {
+    let Some(size) = size else {
         return;
     };
 
@@ -206,17 +225,19 @@ pub fn show(ctx: &egui::Context, config: &Config) {
 
     let config = config.clone();
     let resizable = config.note_resizable;
+    let position = follow(ctx, viewport_id(generation), size);
     ctx.show_viewport_deferred(
         viewport_id(generation),
         egui::ViewportBuilder::default()
-            .with_title("Green Timer Note")
+            .with_title(NOTE_WINDOW_TITLE)
             .with_icon(std::sync::Arc::new(crate::render::themed_window_icon(
                 &config,
             )))
             .with_decorations(false)
-            // The paper is painted opaque over the whole window, so no
-            // transparency is needed. Asking for it would fail on graphics
-            // drivers without a transparent GL config and only log an error.
+            // The window is faded as a whole by the OS compositor (see
+            // `set_window_alpha`), so it never needs a transparent GL config:
+            // that fails on many Windows drivers, and on this machine it only
+            // logs an error every time the note opens.
             .with_transparent(false)
             .with_resizable(resizable)
             .with_taskbar(false)
@@ -229,6 +250,55 @@ pub fn show(ctx: &egui::Context, config: &Config) {
             .with_active(true),
         move |ctx, _class| draw(ctx, &config, generation),
     );
+}
+
+/// Keep the note under the timer: follow the overlay as it is dragged around,
+/// and recentre the note under it whenever its own size changes.
+///
+/// The window has no title bar, so its position is always derived rather than
+/// remembered. Repositioning is held back while the note itself is being
+/// resized, or a drag of its edges would be fought by a stream of moves; the
+/// note recentres under the timer as soon as that drag ends.
+fn follow(
+    ctx: &egui::Context,
+    id: egui::ViewportId,
+    config_size: egui::Vec2,
+) -> egui::Pos2 {
+    // The overlay is the root viewport, and `ctx.input` would read whichever
+    // viewport happens to be current, so both shapes are named explicitly.
+    let anchor = ctx.input_for(egui::ViewportId::ROOT, |i| i.viewport().outer_rect);
+    let (note_rect, pointer_down) =
+        ctx.input_for(id, |i| (i.viewport().inner_rect, i.pointer.any_down()));
+
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if let Some(anchor) = anchor {
+            state.anchor = Some(anchor);
+        }
+        let Some(anchor) = state.anchor else {
+            return state.position.unwrap_or(egui::Pos2::ZERO);
+        };
+        let Some(screen) = state.screen else {
+            return state.position.unwrap_or(egui::Pos2::ZERO);
+        };
+
+        // A size the user dragged to is honoured straight away, before the app
+        // has had a chance to store it, so the note recentres without a lag.
+        let current_size = note_rect.map(|rect| rect.size()).unwrap_or(config_size);
+        let resizing = state
+            .live_inner
+            .is_some_and(|last| (last - current_size).length() > 0.5);
+        state.live_inner = Some(current_size);
+        if resizing || pointer_down {
+            // Mid-drag: leave the window where the OS is putting it, so the
+            // drag is not fought. The next quiet frame recentres it.
+            return state.position.unwrap_or(egui::Pos2::ZERO);
+        }
+
+        let position = place_near(anchor, screen, current_size);
+        state.position = Some(position);
+        position
+    })
 }
 
 /// Put the window near the overlay, kept on the screen it is on.
@@ -258,13 +328,38 @@ fn text_color(config: &Config) -> Color32 {
     }
 }
 
-/// The background the note is written on: the timer's own panel, made fully
-/// opaque so the text stays readable whatever sits behind the window. Some
-/// themes' panels are deliberately translucent, which suits the timer but not
-/// a page of writing.
+/// The background the note is written on: the timer's own panel colour, fully
+/// opaque.
+///
+/// The window itself is faded by the OS compositor (see [`note_alpha`]) rather
+/// than by giving the paper a low alpha: the paper sits on an opaque window
+/// surface, so a translucent paper would only blend towards black and, on a
+/// black theme, look completely unchanged.
 pub fn paper_color(config: &Config) -> Color32 {
-    let panel = crate::render::panel_color(config, 255);
+    let panel = crate::render::panel_color(config, crate::render::background_alpha(config));
     Color32::from_rgb(panel.r(), panel.g(), panel.b())
+}
+
+/// Opacity of the whole note window, `0.0..=1.0`.
+///
+/// `None` means "same as the timer": the overlay's own opacity setting, so the
+/// two fade together. Settings exposes [`timer_note_opacity`] for the slider.
+pub fn note_opacity(config: &Config) -> f32 {
+    config
+        .note_bg_opacity
+        .unwrap_or(config.opacity)
+        .clamp(0.0, 1.0)
+}
+
+/// Opacity of the timer's own panel, `0.0..=1.0`, which is what the note uses
+/// by default so the two match.
+pub fn timer_note_opacity(config: &Config) -> f32 {
+    config.opacity.clamp(0.0, 1.0)
+}
+
+/// The note window's alpha, `0..=255`.
+pub fn note_alpha(config: &Config) -> u8 {
+    (note_opacity(config) * 255.0).round() as u8
 }
 
 /// Visuals used only inside the note window: the user's ink colour on a clear
@@ -407,6 +502,25 @@ fn draw(ctx: &egui::Context, config: &Config, generation: u64) {
 
     if edited {
         store(&text);
+    }
+
+    // The window is faded as a whole through the OS compositor rather than by
+    // the paper's own alpha, so lowering the opacity lets the desktop show
+    // through on every graphics driver. The paper stays opaque, so a note at
+    // full opacity is exactly the page it has always been.
+    let alpha = note_alpha(config);
+    let apply_alpha = STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.applied_alpha == Some(alpha) {
+            return false;
+        }
+        state.applied_alpha = Some(alpha);
+        true
+    });
+    if apply_alpha && !crate::platform::set_window_alpha(NOTE_WINDOW_TITLE, alpha) {
+        // The window does not exist yet on the first frame; try again next one.
+        STATE.with(|state| state.borrow_mut().applied_alpha = None);
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
 
     // A frameless window gets no native resize border, so the edges and corners
@@ -682,12 +796,85 @@ mod tests {
             frame_color(&config),
             crate::render::target_color(&config, crate::engine::ColorRole::Normal)
         );
-        // The paper matches the timer's own panel, and is fully opaque so the
-        // text is readable even when the panel is translucent.
-        let panel = crate::render::panel_color(&config, 255);
+        // The paper matches the timer's own panel. It is painted opaque and the
+        // window is faded instead, so a translucent panel colour never blends
+        // the page into itself.
+        let panel = crate::render::panel_color(&config, crate::render::background_alpha(&config));
         let paper = paper_color(&config);
-        assert_eq!((paper.r(), paper.g(), paper.b()), (panel.r(), panel.g(), panel.b()));
+        assert_eq!(
+            (paper.r(), paper.g(), paper.b()),
+            (panel.r(), panel.g(), panel.b())
+        );
         assert_eq!(paper.a(), 255);
+    }
+
+    #[test]
+    fn the_note_background_matches_the_timer_until_overridden() {
+        let mut config = Config::default();
+        assert_eq!(config.note_bg_opacity, None, "default is same as timer");
+        assert_eq!(note_opacity(&config), config.opacity);
+        assert_eq!(note_alpha(&config), (config.opacity * 255.0).round() as u8);
+
+        // Following the timer means following its *opacity*, not the theme's
+        // panel alpha: a black panel at alpha 0 would otherwise be invisible.
+        config.theme = crate::config::Theme::WarmPaper;
+        config.opacity = 0.4;
+        assert_eq!(note_opacity(&config), 0.4);
+        assert_eq!(note_alpha(&config), 102);
+
+        // An explicit value wins and is clamped.
+        config.note_bg_opacity = Some(0.5);
+        assert_eq!(note_alpha(&config), 128);
+        config.note_bg_opacity = Some(9.0);
+        assert_eq!(note_alpha(&config), 255, "out of range is clamped");
+        config.note_bg_opacity = Some(-3.0);
+        assert_eq!(note_alpha(&config), 0, "out of range is clamped");
+
+        // Either way the page itself stays solid.
+        assert_eq!(paper_color(&config).a(), 255);
+    }
+
+    #[test]
+    fn the_slider_default_shows_the_timers_own_opacity() {
+        let config = Config {
+            opacity: 0.7,
+            ..Default::default()
+        };
+        assert!((timer_note_opacity(&config) - 0.7).abs() < 0.001);
+        assert!((note_opacity(&config) - 0.7).abs() < 0.001);
+    }
+
+    #[test]
+    fn a_moved_timer_takes_the_note_with_it() {
+        let before = Rect::from_min_size(Pos2::new(800.0, 40.0), egui::vec2(211.0, 103.0));
+        let after = Rect::from_min_size(Pos2::new(300.0, 500.0), egui::vec2(211.0, 103.0));
+        let first = place_near(before, screen(), size());
+        let moved = place_near(after, screen(), size());
+
+        // The note keeps the same offset from the timer, so it tracks the drag.
+        assert_eq!(
+            moved.x - after.center().x,
+            first.x - before.center().x,
+            "horizontal offset is kept"
+        );
+        assert!((moved.y - after.bottom()).abs() - (first.y - before.bottom()).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_resized_note_stays_centred_under_the_timer() {
+        let anchor = Rect::from_min_size(Pos2::new(600.0, 100.0), egui::vec2(211.0, 103.0));
+        for width in [120.0_f32, 280.0, 420.0, 900.0] {
+            let resized = egui::vec2(width, 200.0);
+            let pos = place_near(anchor, screen(), resized);
+            let centre = pos.x + resized.x / 2.0;
+            assert!(
+                (centre - anchor.center().x).abs() <= 1.0,
+                "width {width}: centre {centre} vs {}",
+                anchor.center().x
+            );
+            assert!(pos.x >= screen().left());
+            assert!(pos.x + resized.x <= screen().right() + 0.01);
+        }
     }
 
     #[test]

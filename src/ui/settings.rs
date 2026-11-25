@@ -1502,6 +1502,38 @@ impl SettingsState {
             "Let the note's edges be dragged to resize it",
         );
 
+        ui.add_space(8.0);
+        // Opacity starts on "same as timer", so a fresh note matches it exactly.
+        let same_as_timer = self.draft.note_bg_opacity.is_none();
+        let mut opacity = (crate::note::note_opacity(&self.draft) * 100.0).round() as u8;
+        ui.horizontal(|ui| {
+            ui.label("Background opacity");
+            if ui
+                .add(
+                    egui::Slider::new(&mut opacity, 0..=100)
+                        .suffix("%")
+                        .clamping(egui::SliderClamping::Always),
+                )
+                .on_hover_text("How solid the note window is; lower lets the desktop show through")
+                .changed()
+            {
+                self.draft.note_bg_opacity = Some(opacity as f32 / 100.0);
+            }
+            if ui
+                .add_enabled(!same_as_timer, egui::Button::new("Same as timer"))
+                .on_hover_text("Use exactly the timer's own opacity (the default)")
+                .clicked()
+            {
+                self.draft.note_bg_opacity = None;
+            }
+        });
+        if same_as_timer {
+            ui.small(format!(
+                "Matches the timer's own opacity ({}%).",
+                (crate::note::timer_note_opacity(&self.draft) * 100.0).round() as u8
+            ));
+        }
+
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             let min = crate::config::NOTE_MIN_SIDE;

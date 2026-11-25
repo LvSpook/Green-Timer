@@ -261,9 +261,42 @@ mod imp {
         }
     }
 
+    /// Fade a whole window with the OS compositor.
+    ///
+    /// Per-pixel see-through needs a transparent GL config, which many Windows
+    /// drivers refuse, so the note uses the layered-window route instead: the
+    /// compositor blends the finished window against the desktop, which works
+    /// on every driver. `alpha` is `0..=255`, where 255 leaves it fully solid.
+    ///
+    /// Returns whether the attributes were applied; the window may not exist
+    /// yet on the frame the note opens.
+    pub fn set_window_alpha(title: &str, alpha: u8) -> bool {
+        use windows::Win32::Foundation::COLORREF;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FindWindowW, GetWindowLongW, SetLayeredWindowAttributes, SetWindowLongW,
+            GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED,
+        };
+
+        let title = wide(title);
+        let Ok(window) = (unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) }) else {
+            return false;
+        };
+        if window.0.is_null() {
+            return false;
+        }
+        unsafe {
+            let current = GetWindowLongW(window, GWL_EXSTYLE) as u32;
+            let layered = current | WS_EX_LAYERED.0;
+            if layered != current {
+                SetWindowLongW(window, GWL_EXSTYLE, layered as i32);
+            }
+            // The colour key is unused with `LWA_ALPHA`, but the call needs one.
+            SetLayeredWindowAttributes(window, COLORREF(0), alpha, LWA_ALPHA).is_ok()
+        }
+    }
+
     /// Play a WAV file asynchronously, or the OS alert when no file is usable.
-    pub fn play_sound(path: &str) {
-        if !path.is_empty() && std::path::Path::new(path).is_file() {
+    pub fn play_sound(path: &str) {        if !path.is_empty() && std::path::Path::new(path).is_file() {
             let sound = wide(path);
             let played = unsafe {
                 PlaySoundW(
@@ -291,6 +324,9 @@ mod imp {
     pub fn set_click_through(_window: isize, _enabled: bool) {}
     pub fn apply_blur(_window: isize, _enable: bool) {}
     pub fn set_dark_title_bar(_window: isize, _enabled: bool) {}
+    pub fn set_window_alpha(_title: &str, _alpha: u8) -> bool {
+        false
+    }
     pub fn foreground_window() -> u64 {
         0
     }
@@ -319,7 +355,6 @@ pub fn set_topmost(window: isize, topmost: bool) {
 pub fn set_click_through(window: isize, enabled: bool) {
     imp::set_click_through(window, enabled);
 }
-
 pub fn apply_blur(window: isize, enable: bool) {
     if IS_WINDOWS {
         imp::apply_blur(window, enable);
@@ -328,6 +363,18 @@ pub fn apply_blur(window: isize, enable: bool) {
 
 pub fn set_dark_title_bar(window: isize, enabled: bool) {
     imp::set_dark_title_bar(window, enabled);
+}
+
+/// Fade a whole window with the OS compositor, by title.
+///
+/// `alpha` is `0..=255`. Returns whether it was applied; the window may not
+/// exist yet on the frame a note opens.
+pub fn set_window_alpha(title: &str, alpha: u8) -> bool {
+    if IS_WINDOWS {
+        imp::set_window_alpha(title, alpha)
+    } else {
+        false
+    }
 }
 
 /// Ask the user a yes/no question in a native message box.
