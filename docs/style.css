@@ -516,6 +516,9 @@ kbd {
 
 pre {
   margin: 0;
+  /* Grid children default to min-width:auto, so a long command line would
+     widen the whole page instead of scrolling inside the block. */
+  min-width: 0;
   padding: 16px 18px;
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -572,7 +575,9 @@ td code { white-space: nowrap; }
 
 /* ---------- layout helpers ---------- */
 
-.stack { display: grid; gap: 18px; }
+/* minmax(0,1fr), not the default auto: an auto track sizes to max-content,
+   so a long command line inside <pre> widened the whole page on mobile. */
+.stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
 .stack p.hint { margin: 0 0 8px; color: var(--muted); font-size: 0.92rem; }
 
 /* ---------- footer ---------- */
@@ -612,5 +617,7 @@ footer a:hover { color: var(--text); text-decoration: underline; text-underline-
   .table-wrap { overflow-x: auto; }
   th, td { padding: 10px 12px; }
   .notice { padding: 14px 15px; }
+  /* A single long command has nowhere to scroll to on a phone, so let it wrap. */
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   .notice p { font-size: 0.9rem; }
 }
